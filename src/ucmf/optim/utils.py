@@ -29,22 +29,21 @@ def validate_tensor(value, *, name, dtype=None, device=None):
         raise ValueError(msg)
 
 
-def prepare_sensing_matrix(A):
+def prepare_sensing_matrix(A, *, dtype=None, device=None):
     """Validate and prepare a fixed real sensing matrix for a solver call.
 
     Accepts a shared matrix of shape ``(m, n)`` or batched matrices of shape
-    ``(B, m, n)``. Requires a real floating-point tensor. The result is detached
-    and contiguous, with its original dtype and device unchanged.
-
-    Returns ``(A_tensor, None)``; the second entry preserves the solver's
-    preparation contract for column norms. No column normalization is applied.
-    Raises ValueError for missing, complex, empty, or incorrectly ranked input.
+    ``(B, m, n)``. Requires a real floating-point tensor, optionally with the
+    exact ``dtype``/``device``. The result is detached and contiguous, with its
+    original dtype and device unchanged. No column normalization is applied.
+    Raises ValueError for missing, complex, empty, mismatched, or incorrectly
+    ranked input.
     """
     if A is None:
         msg = 'A must be provided in forward().'
         raise ValueError(msg)
 
-    validate_tensor(A, name='A')
+    validate_tensor(A, name='A', dtype=dtype, device=device)
     A_tensor = A.detach()
 
     if A_tensor.ndim not in (2, 3):
@@ -54,8 +53,7 @@ def prepare_sensing_matrix(A):
     if 0 in A_tensor.shape[-2:]:
         msg = 'A must have non-empty measurement and source dimensions.'
         raise ValueError(msg)
-    A_tensor = A_tensor.contiguous()
-    return A_tensor, None
+    return A_tensor.contiguous()
 
 
 def to_batch_vector(tensor, name):

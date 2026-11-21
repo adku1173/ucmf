@@ -12,7 +12,7 @@ class _WeightedForward:
     """Only the subclass exposes W; no unfolded model is migrated here."""
 
     def forward(self, y, x0=None, t=1, A=None, lam=None, gamma=None, W=None):
-        y, x0, A, _norms, gamma, theta, operator = self._setup_forward(y, x0, A, lam, gamma, W=W)
+        y, x0, A, gamma, theta, operator = self._setup_forward(y, x0, A, lam, gamma, W=W)
         return self._iterate(y, x0, A, gamma, theta, t, Op_tensor=operator)
 
 

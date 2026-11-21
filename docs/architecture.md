@@ -52,7 +52,7 @@ Both loops call `_start_iterations`,
 
 For classical solves the callback operator W equals A. Callback order, batched
 stopping, intermediate autograd graphs, and zero-step behavior are unchanged.
-The existing callback attributes (`y`, `iter`, `stop`, `l2_norms`) remain mutable;
+The existing callback attributes (`y`, `iter`, `stop`) remain mutable;
 one shared solver/callback instance is not made concurrent or reentrant.
 
 ## Learned step schedules
@@ -83,8 +83,9 @@ threshold, return `lam * gamma_k`; directly learned theta is a different policy.
 A neurally augmented model can override forward or `_iterate`, initialize
 hidden/cell tensors locally, and predict gamma/theta inside a normal for-loop.
 Reuse `_prepare_forward_inputs`, `_iteration_functions`, `_init_solver_vector`,
-`_validate_iteration_count`, and the callback helpers. An accelerated version
-can reuse `_nesterov_momentum` with local x, z, tk.
+and the callback helpers. An accelerated version
+can reuse `_nesterov_momentum` with local x, z, tk; it returns `(tk, z)`
+and the caller assigns `x = x_next`.
 
 This is the same straightforward control-flow pattern as
 [NA-ALISTA's reference implementation](https://github.com/feeds/na-alista/blob/master/utils/algorithms.py).
@@ -102,7 +103,7 @@ from ucmf import FISTA
 
 class WeightedForwardExample(FISTA):
     def forward(self, y, x0=None, t=1, A=None, lam=None, gamma=None, W=None):
-        y, x0, A, _norms, gamma, theta, operator = self._setup_forward(
+        y, x0, A, gamma, theta, operator = self._setup_forward(
             y, x0, A, lam, gamma, W=W,
         )
         return self._iterate(y, x0, A, gamma, theta, t, Op_tensor=operator)

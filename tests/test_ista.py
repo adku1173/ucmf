@@ -150,7 +150,6 @@ def test_sensing_matrix_is_fixed_but_measurements_remain_differentiable(solver_t
     assert A.grad is None
     torch.testing.assert_close(y.grad, torch.ones_like(y))
     assert list(solver.parameters()) == []
-    assert solver.l2_norms is None
 
 
 @pytest.mark.parametrize('solver_type', SOLVERS)
@@ -198,9 +197,6 @@ def test_preprocessed_inputs_and_noncontiguous_sensing_matrix(solver_type):
         ({'lam': torch.tensor([0.1, 0.2, 0.3])}, 'expected batch size'),
         ({'gamma': torch.ones(2, 2)}, 'gamma must be scalar'),
         ({'lam': torch.ones(2, 1, 1)}, 'lam must be scalar'),
-        ({'t': -1}, 't must be a non-negative integer'),
-        ({'t': 1.5}, 't must be a non-negative integer'),
-        ({'t': True}, 't must be a non-negative integer'),
     ],
 )
 def test_invalid_inputs_raise_clear_errors(solver_type, overrides, message):
@@ -238,7 +234,7 @@ def test_removed_gradient_mode_is_not_silently_accepted(solver_type, mode):
 
 @pytest.mark.parametrize('solver_type', SOLVERS)
 @pytest.mark.parametrize('batched_A', [True, False])
-def test_ls_gradient_hook_can_return_the_residual(solver_type, batched_A):
+def test_ls_gradient_hook_matches_normalized_adjoint_residual(solver_type, batched_A):
     A = torch.tensor([[1.0, 0.1], [0.3, 1.5]], dtype=torch.float64)
     if batched_A:
         A = torch.stack([A, 2 * A])
@@ -246,8 +242,7 @@ def test_ls_gradient_hook_can_return_the_residual(solver_type, batched_A):
     x = torch.tensor([[0.2, 0.3], [0.1, 0.2]], dtype=A.dtype)
     residual = y - (A @ x.unsqueeze(-1)).squeeze(-1)
     expected = (residual.unsqueeze(-2) @ A).squeeze(-2) / y.shape[1]
-    grad, actual_residual = solver_type().get_grad_func()(y, x, A, get_residual=True)
-    torch.testing.assert_close(actual_residual, residual)
+    grad = solver_type().get_grad_func()(y, x, A)
     torch.testing.assert_close(grad, expected)
 
 

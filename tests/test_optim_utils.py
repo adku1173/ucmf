@@ -72,12 +72,11 @@ def test_batch_parameter_scalar_missing_invalid_and_autograd_cases():
 
 def test_sensing_matrix_is_detached_contiguous_without_conversion():
     A = torch.ones(2, 4, dtype=torch.float64, requires_grad=True).T
-    prepared, norms = prepare_sensing_matrix(A)
+    prepared = prepare_sensing_matrix(A)
     assert prepared.is_contiguous()
     assert not prepared.requires_grad
     assert prepared.dtype == A.dtype
     assert prepared.device == A.device
-    assert norms is None
     torch.testing.assert_close(prepared, A)
     with pytest.raises(ValueError, match='A must be a real floating-point tensor'):
         prepare_sensing_matrix([[1, 2]])

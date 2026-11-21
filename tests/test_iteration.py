@@ -57,12 +57,12 @@ class ScheduledFISTA(FISTA):
         self.thetas = torch.nn.Parameter(torch.tensor([0.01, 0.02, 0.015], dtype=torch.float64))
 
     def forward(self, y, x0=None, t=1, A=None, lam=None, gamma=None, W=None):
-        y, x0, A, _norms, gamma, theta, operator = self._setup_forward(y, x0, A, lam, gamma, W=W)
+        y, x0, A, gamma, theta, operator = self._setup_forward(y, x0, A, lam, gamma, W=W)
         return self._iterate(y, x0, A, gamma, theta, t, Op_tensor=operator)
 
     def _setup_forward(self, y, x0, A, lam, gamma, W=None):
-        y, x0, A, norms, _ = self._prepare_forward_inputs(y, x0, A)
-        return y, x0, A, norms, None, None, prepare_gradient_weight(W, A, y)
+        y, x0, A, _ = self._prepare_forward_inputs(y, x0, A)
+        return y, x0, A, None, None, prepare_gradient_weight(W, A, y)
 
     def _step_params(self, k):
         return self.gammas[k], self.thetas[k]
@@ -102,7 +102,6 @@ def test_own_recurrent_loop_keeps_graphs_and_resets_local_hidden_state(solver_ty
             self.gain = torch.nn.Parameter(torch.tensor(0.2, dtype=torch.float64))
 
         def _iterate(self, y, x0, A_tensor, gamma_value, theta_value, t, Op_tensor=None):
-            self._validate_iteration_count(t)
             if Op_tensor is None:
                 Op_tensor = A_tensor
             grad_func, shrink_func = self._iteration_functions()
@@ -126,9 +125,8 @@ def test_own_recurrent_loop_keeps_graphs_and_resets_local_hidden_state(solver_ty
                 theta = lam * gamma
                 x_next = shrink_func(point + gamma * grad, theta)
                 if solver_type is FISTA:
-                    tk, z, x = self._nesterov_momentum(tk, x, x_next)
-                else:
-                    x = x_next
+                    tk, z = self._nesterov_momentum(tk, x, x_next)
+                x = x_next
                 if not self._on_iteration_end(x, gamma, theta, A_tensor, y, W_tensor=Op_tensor):
                     break
             return x
@@ -176,7 +174,7 @@ def test_schedule_only_runs_for_executed_steps():
 def test_existing_momentum_hook_can_disable_acceleration():
     class UnacceleratedFISTA(FISTA):
         def _nesterov_momentum(self, tk, x, x_next):
-            return 1.0, x_next, x_next
+            return 1.0, x_next
 
     A = torch.tensor([[1.0, 0.2], [0.3, 1.3]])
     y = torch.tensor([[1.0, 0.5]])
@@ -190,13 +188,9 @@ def test_gradient_and_callback_hooks_are_dispatched(solver_type):
     seen = []
 
     class CustomSolver(solver_type):
-        def ls_grad(self, y, x, A, Op=None, get_residual=False):
+        def ls_grad(self, y, x, A, Op=None):
             seen.append('gradient')
-            result = super().ls_grad(y, x, A, Op=Op, get_residual=get_residual)
-            if get_residual:
-                grad, residual = result
-                return 2 * grad, residual
-            return 2 * result
+            return 2 * super().ls_grad(y, x, A, Op=Op)
 
         def _start_iterations(self, y):
             seen.append('start')

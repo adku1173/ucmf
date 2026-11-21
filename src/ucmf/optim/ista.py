@@ -64,8 +64,8 @@ class ISTA(nn.Module):
 
     @staticmethod
     def shrink(x, thresh):
-        """Element-wise soft-thresholding."""
-        return torch.sign(x) * F.relu(x.abs() - thresh)
+        """Element-wise soft-thresholding for a non-negative threshold."""
+        return x - x.clamp(min=-thresh, max=thresh)
 
     @staticmethod
     def shrink_positive(x, thresh):
@@ -76,15 +76,12 @@ class ISTA(nn.Module):
         """
         return F.relu(x - thresh)
 
-    def ls_grad(self, y, x, A, Op=None, get_residual=False):
+    def ls_grad(self, y, x, A, Op=None):
         """Compute gradient using least-squares mode."""
         if Op is None:
             Op = A
         res = y - apply_forward_operator(A, x)
-        grad = apply_adjoint_operator(res, Op) / float(y.shape[1])
-        if get_residual:
-            return grad, res
-        return grad
+        return apply_adjoint_operator(res, Op) / float(y.shape[1])
 
     def get_grad_func(self):
         """Return the normalized LS gradient hook."""
@@ -111,16 +108,14 @@ class ISTA(nn.Module):
             y = y.unsqueeze(0)
         batch_size = y.shape[0]
 
-        A_tensor, l2_norms = prepare_sensing_matrix(A)
-        validate_tensor(A_tensor, name='A', dtype=y.dtype, device=y.device)
+        A_tensor = prepare_sensing_matrix(A, dtype=y.dtype, device=y.device)
         if x0 is not None:
             validate_tensor(x0, name='x0', dtype=y.dtype, device=y.device)
             if x0.ndim == 1:
                 x0 = x0.unsqueeze(0)
 
-        self.l2_norms = l2_norms
         validate_shapes(y, x0, A_tensor)
-        return y, x0, A_tensor, l2_norms, batch_size
+        return y, x0, A_tensor, batch_size
 
     def _resolve_lam_value(self, lam, batch_size, A_tensor, missing_message='lam must be provided.'):
         """Resolve regularization strength for scalar or per-batch input."""
@@ -159,7 +154,7 @@ class ISTA(nn.Module):
         The classical forward never supplies W. A subclass can expose W in its
         own forward and use this hook without duplicating tensor preparation.
         """
-        y, x0, A_tensor, l2_norms, batch_size = self._prepare_forward_inputs(y, x0, A)
+        y, x0, A_tensor, batch_size = self._prepare_forward_inputs(y, x0, A)
         W_tensor = prepare_gradient_weight(W, A_tensor, y)
         lam_value = self._resolve_lam_value(lam, batch_size, A_tensor)
         gamma_value, theta_value = self._resolve_gamma_theta(
@@ -168,7 +163,7 @@ class ISTA(nn.Module):
             batch_size,
             A_tensor,
         )
-        return y, x0, A_tensor, l2_norms, gamma_value, theta_value, W_tensor
+        return y, x0, A_tensor, gamma_value, theta_value, W_tensor
 
     def _start_iterations(self, y):
         """Initialize callback-visible solver state."""
@@ -245,8 +240,10 @@ class ISTA(nn.Module):
         -------
             Tensor: solution of shape ``(B, n)``
         """
-        y, x0, A_tensor, l2_norms, gamma_value, theta_value, Op_tensor = self._setup_forward(y, x0, A, lam, gamma)
-        del l2_norms
+        if t < 0:
+            msg = 't must be non-negative.'
+            raise ValueError(msg)
+        y, x0, A_tensor, gamma_value, theta_value, Op_tensor = self._setup_forward(y, x0, A, lam, gamma)
         return self._iterate(y, x0, A_tensor, gamma_value, theta_value, t, Op_tensor=Op_tensor)
 
 
@@ -261,10 +258,10 @@ class FISTA(ISTA):
     """
 
     def _nesterov_momentum(self, tk, x, x_next):
-        """Apply the standard Nesterov momentum recurrence."""
+        """Apply the standard Nesterov momentum recurrence; return ``(t_next, z_next)``."""
         t_next = 0.5 + math.sqrt(1.0 + 4.0 * tk**2) / 2.0
         z_next = x_next + (tk - 1.0) / t_next * (x_next - x)
-        return t_next, z_next, x_next
+        return t_next, z_next
 
     def _iterate_accelerated(self, y, x0, A_tensor, t, step_params_fn, Op_tensor=None):
         """Run FISTA with local momentum and caller-provided step parameters."""
@@ -290,7 +287,8 @@ class FISTA(ISTA):
                 theta=theta_k,
                 Op=Op_tensor,
             )
-            tk, z, x = self._nesterov_momentum(tk, x, x_next)
+            tk, z = self._nesterov_momentum(tk, x, x_next)
+            x = x_next
             if not self._on_iteration_end(x, gamma_k, theta_k, A_tensor, y, W_tensor=Op_tensor):
                 break
         return x
