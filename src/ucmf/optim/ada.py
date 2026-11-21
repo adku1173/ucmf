@@ -108,9 +108,10 @@ class AdaLFISTASW(FISTA):
         # autograd graph through B is preserved. The layer update then is
         #   x_{k+1} = shrink(z_k + gamma_k * W.T @ (y - A @ z_k) / m, theta_k).
         W_tensor = prepare_gradient_weight(self._effective_weight(A_tensor, msm_subset), A_tensor, y)
-        # gamma = softplus(_gamma), theta = softplus(_theta); applied once here,
-        # not per layer. gammas[k]/thetas[k] are the values used at layer k.
-        gammas, thetas = self.gamma, self.theta
+        # gamma = softplus(_gamma), theta = softplus(_theta): applied once here,
+        # then unbound into per-layer scalars so the loop only does tuple indexing
+        # (no per-layer tensor __getitem__ dispatch). unbind keeps the autograd graph.
+        gammas, thetas = self.gamma.unbind(), self.theta.unbind()
         return self._iterate_accelerated(
             y,
             x0,
