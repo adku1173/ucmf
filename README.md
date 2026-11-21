@@ -2,7 +2,7 @@
 
 ## Installation and checks
 
-Python 3.10 or newer is required.
+Python 3.13 or newer is required.
 
 ```bash
 uv sync
@@ -11,9 +11,14 @@ uv run ruff check .
 uv run python examples/sparse_recovery.py
 ```
 
-Alternatively, use `pip install -e .` (and install `pytest` separately for tests).
-Runtime dependencies are PyTorch and NumPy; Acoular, TensorFlow, datasets,
-training code, and the original `fa2026` package are not required.
+Runtime dependencies are PyTorch and NumPy. The `examples` dependency group
+(included in `dev`, installed by `uv sync`) adds Acoular and Matplotlib.
+Acoular is taken from the `cmf-problem-assembly` branch via `[tool.uv.sources]`;
+the `acoular.solvers` interface used by `ucmf.acoular` is not yet released on PyPI,
+so with `pip install -e .` install Acoular separately from that branch:
+`pip install "acoular @ git+https://github.com/acoular/acoular.git@cmf-problem-assembly"`.
+`import ucmf` never imports Acoular; only `ucmf.acoular` does.
+TensorFlow, datasets, training code, and the original `fa2026` package are not required.
 
 ## Usage
 
@@ -70,7 +75,8 @@ There is **no implicit column normalization**. If desired, use
 Regularization then acts on `z`, not on the unscaled physical source powers.
 For CMF inputs, `A` and `y` must use the same vectorization, row ordering,
 diagonal-removal setting, and off-diagonal weights (the source repo uses
-`sqrt(2)` weights). This package does not construct or vectorize CSMs yet.
+`sqrt(2)` weights). The core solvers do not construct or vectorize CSMs; with
+[`ucmf.acoular`](#acoular-integration), Acoular's `BeamformerCMF` does this.
 
 ### Callbacks and differentiability
 
@@ -99,6 +105,53 @@ are not classical ISTA/FISTA; their step-size guarantees need separate treatment
 
 Only normalized least squares is supported. The old `ls_mode` argument and
 TLS implementation have been removed; do not pass `ls_mode`, even `'ls'`.
+
+## Acoular integration
+
+`ucmf.acoular` provides ISTA and FISTA as custom solvers for Acoular's
+inverse-problem interface, e.g. for `acoular.BeamformerCMF`:
+
+```python
+import acoular as ac
+from acoular.solvers import L1RegularizedLeastSquaresProblem
+from ucmf.acoular import FISTATorchSolver
+
+problem = L1RegularizedLeastSquaresProblem(
+    solver=FISTATorchSolver(device='cuda', precision='float32', n_iter=5000, tol=1e-8),
+    alpha=1e-9,
+    nonnegative=True,
+    dictionary_scaling='unit_l2',
+)
+bf = ac.BeamformerCMF(freq_data=ps, steer=st, problem=problem)
+```
+
+- `TorchSolver(LeastSquaresSolver)` is the shared base class; `ISTATorchSolver`
+  and `FISTATorchSolver` select the ucmf solver.
+- Traits: `device` (`'cpu'`, `'cuda'`, ...), `precision` (`'float64'` or
+  `'float32'`), `n_iter` (maximum iterations per frequency bin), and `tol`
+  (relative solution change for `SolutionChangeStopper`). All enter the
+  solver digest, so Acoular's caching distinguishes configurations.
+- The problem must be an `L1RegularizedLeastSquaresProblem`: positivity comes
+  from `problem.nonnegative`, and the regularization is
+  `lam = problem.alpha * problem.unit_mult`, matching Acoular's LassoLars
+  convention. The ucmf objective equals scikit-learn's Lasso objective, so
+  results are directly comparable to `LassoLarsSolver(backend_kwargs={'fit_intercept': False})`.
+  Scaling is done by the problem, not the solver.
+- An optional `start_value` is used as warm start `x0`.
+  `SolverOutput.info` reports `n_steps` and `converged`.
+
+### Example: three sources
+
+[`examples/sparse_recovery.py`](examples/sparse_recovery.py) simulates the
+three white-noise sources of Acoular's introductory example in front of the
+64-microphone array and solves the same CMF problem (third-octave band at
+8 kHz, `alpha=1e-9`) with LassoLars, ISTA, and FISTA (5000 iterations each):
+
+![CMF maps of three sources with LassoLars, ISTA, and FISTA](docs/images/three_sources_cmf.png)
+
+FISTA matches the LassoLars map up to a relative difference of about `2e-4`.
+ISTA has not yet converged after 5000 iterations and still yields
+spatially smeared sources.
 
 ## Extending the iteration
 
