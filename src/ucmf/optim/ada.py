@@ -2,7 +2,7 @@
 
 ``AdaLFISTASW`` augments FISTA with three sets of trainable parameters:
 
-    - ``B``: a single ``m x m`` mixing matrix forming the effective adjoint-side
+    - ``B``: a single ``m x m`` auxiliary weight matrix forming the effective adjoint-side
       gradient weight ``W = B @ A``. With ``B = I`` the update reduces to FISTA.
     - ``gamma``: per-iteration step sizes actually applied at each iteration.
     - ``theta``: per-iteration soft-thresholds actually applied at each iteration.
@@ -16,25 +16,13 @@ with Nesterov momentum. Neither ``lam`` nor ``gamma`` are passed to
 ``forward``; the model learns ``gamma`` and ``theta`` directly.
 """
 
-import math
-
 from .ista import FISTA
-from .utils import validate_unfolded_iterations
-from .weights import prepare_gradient_weight
+from .utils import softplus_inverse, validate_unfolded_iterations
+from .weights import apply_auxiliary_weight, measurement_subset_weight, prepare_gradient_weight
 
 import torch
 import torch.nn.functional as F
 from torch import nn
-
-
-def _softplus_inverse(value, eps=1e-12):
-    """Return x with ``softplus(x) ~= max(value, eps)`` for parameter init.
-
-    Uses double-precision Python math so the init does not silently downcast to
-    float32; the result matches the requested applied value to rounding.
-    """
-    value = max(float(value), eps)
-    return value + math.log(-math.expm1(-value))
 
 
 class AdaLFISTASW(FISTA):
@@ -47,7 +35,7 @@ class AdaLFISTASW(FISTA):
         theta_init (float): initial applied soft-threshold for every iteration.
         positive (bool): enforce non-negativity via positive shrinkage.
         callbacks (list | None): optional solver callbacks.
-        B (Tensor | None): optional ``(m, m)`` init for the mixing matrix;
+        B (Tensor | None): optional ``(m, m)`` init for the auxiliary weight matrix;
             defaults to the identity, reproducing classical FISTA.
     """
 
@@ -75,8 +63,8 @@ class AdaLFISTASW(FISTA):
             raise ValueError(f'B must have shape {expected_shape}, got {tuple(B_tensor.shape)}.')
         self.B = nn.Parameter(B_tensor)
 
-        self._gamma = nn.Parameter(torch.full((n_iterations,), float(_softplus_inverse(gamma_init))))
-        self._theta = nn.Parameter(torch.full((n_iterations,), float(_softplus_inverse(theta_init))))
+        self._gamma = nn.Parameter(torch.full((n_iterations,), float(softplus_inverse(gamma_init))))
+        self._theta = nn.Parameter(torch.full((n_iterations,), float(softplus_inverse(theta_init))))
 
     @property
     def gamma(self):
@@ -89,27 +77,28 @@ class AdaLFISTASW(FISTA):
         return F.softplus(self._theta)
 
     def _effective_weight(self, A_tensor, msm_subset):
-        """Return the effective adjoint-side weight ``W = B @ A``.
+        """Return the effective adjoint-side weight for this solve.
 
         The forward operator stays ``A``; only the adjoint ``A.T`` is replaced by
-        ``W.T``. ``B = I`` gives ``W = A``, i.e. classical FISTA.
+        ``W.T``. ``B = I`` gives ``W = A``, i.e. classical FISTA. For a reduced
+        measurement set ``I`` the full ``B`` is restricted to the active rows and
+        columns, so the gradient only couples active measurements.
         """
-        if msm_subset is not None:
-            raise NotImplementedError('msm_subset (reduced measurement set) is added in a later step.')
-        if A_tensor.shape[-2] != self.n_measurements:
-            raise ValueError(f'A has {A_tensor.shape[-2]} measurements but B expects {self.n_measurements}.')
-        if A_tensor.ndim == 2:
-            # W = B @ A : (m, m) @ (m, n) -> (m, n)
-            return self.B @ A_tensor
-        # Batched A: W_b = B @ A_b for each sample b, (m, m) @ (b, m, n) -> (b, m, n)
-        return torch.bmm(self.B.unsqueeze(0).expand(A_tensor.shape[0], -1, -1), A_tensor)
+        if msm_subset is None:
+            # W = B @ A on the full measurement set.
+            if A_tensor.shape[-2] != self.n_measurements:
+                raise ValueError(f'A has {A_tensor.shape[-2]} measurements but B expects {self.n_measurements}.')
+            return apply_auxiliary_weight(self.B, A_tensor)
+        # W_sub = B[I, I] @ A_sub on the reduced measurement set I = msm_subset.
+        return measurement_subset_weight(self.B, A_tensor, msm_subset, self.n_measurements)
 
     def forward(self, y, x0=None, t=1, A=None, msm_subset=None):
         """Run single-weight Ada-LFISTA with learned ``gamma``/``theta`` and ``W = B @ A``.
 
         All tensor inputs and the model's parameters must already share ``y``'s
-        dtype and device. ``msm_subset`` selects a reduced measurement set and is
-        enabled in a later step.
+        dtype and device. ``msm_subset`` is an optional integer index tensor
+        (``(m_sub,)`` or per-sample ``(B, m_sub)``) naming the original rows of
+        the already-subsetted ``y``/``A``; it restricts ``B`` to ``B[I, I]``.
         """
         validate_unfolded_iterations(t, self.n_iterations)
         # The shared hook also returns the batch size for per-sample lam/gamma in

@@ -1,5 +1,6 @@
 """Stateless tensor preparation and operator helpers for sparse solvers."""
 
+import math
 from numbers import Real
 
 import torch
@@ -182,3 +183,13 @@ def validate_unfolded_iterations(t, n_iterations):
         raise ValueError('t must be non-negative.')
     if t > n_iterations:
         raise ValueError(f't ({t}) cannot exceed n_iterations ({n_iterations}).')
+
+
+def softplus_inverse(value, eps=1e-12):
+    """Return x with ``softplus(x) ~= max(value, eps)`` for parameter init.
+
+    Uses double-precision Python math so the init does not silently downcast to
+    float32; the result matches the requested applied value to rounding.
+    """
+    value = max(float(value), eps)
+    return value + math.log(-math.expm1(-value))
