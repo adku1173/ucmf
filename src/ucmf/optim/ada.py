@@ -90,7 +90,7 @@ class AdaLFISTASW(FISTA):
                 raise ValueError(f'A has {A_tensor.shape[-2]} measurements but B expects {self.n_measurements}.')
             return apply_auxiliary_weight(self.B, A_tensor)
         # W_sub = B[I, I] @ A_sub on the reduced measurement set I = msm_subset.
-        return measurement_subset_weight(self.B, A_tensor, msm_subset, self.n_measurements)
+        return measurement_subset_weight(self.B, A_tensor, msm_subset)
 
     def forward(self, y, x0=None, t=1, A=None, msm_subset=None):
         """Run single-weight Ada-LFISTA with learned ``gamma``/``theta`` and ``W = B @ A``.

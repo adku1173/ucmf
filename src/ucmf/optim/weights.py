@@ -56,11 +56,18 @@ def apply_auxiliary_weight(B, A_tensor):
     return torch.bmm(B.unsqueeze(0).expand(A_tensor.shape[0], -1, -1), A_tensor)
 
 
-def validate_measurement_subset(msm_subset, A_tensor, n_measurements, device):
+def validate_measurement_subset(msm_subset, A_tensor, device):
     """Validate and return long measurement indices ``I`` into the full auxiliary weight.
 
     ``I`` names the original rows of the already-subsetted ``A``; it must be an
     integer tensor on ``device`` (the auxiliary weight's device).
+
+    Only metadata (dtype, device, shape) is checked. Precondition: every entry
+    lies in ``[0, m)`` for the full measurement count ``m``. This must be
+    guaranteed by the index generator (e.g. a CV split). A value check here
+    would read the indices on the host and force a GPU sync on every forward.
+    Violations are not caught: negative entries wrap around silently in the
+    per-sample path; too large entries raise in indexing (device assert on CUDA).
     """
     if not torch.is_tensor(msm_subset) or msm_subset.dtype not in (torch.int32, torch.int64):
         raise ValueError('msm_subset must be an integer tensor of measurement indices.')
@@ -76,18 +83,16 @@ def validate_measurement_subset(msm_subset, A_tensor, n_measurements, device):
             raise ValueError('per-sample msm_subset (2D) requires batched A of shape (B, m_sub, n).')
         if idx.shape[0] != A_tensor.shape[0]:
             raise ValueError(f'msm_subset batch {idx.shape[0]} does not match A batch {A_tensor.shape[0]}.')
-    if idx.numel() and (torch.any(idx < 0) or torch.any(idx >= n_measurements)):
-        raise ValueError(f'msm_subset entries must lie in [0, {n_measurements}).')
     return idx.long()
 
 
-def measurement_subset_weight(B, A_tensor, msm_subset, n_measurements):
+def measurement_subset_weight(B, A_tensor, msm_subset):
     """Effective weight on a reduced measurement set ``I``: ``W_sub = B[I, I] @ A_sub``.
 
     ``A_tensor`` holds the active rows ``A_sub``; ``msm_subset`` gives the original
     indices ``I`` so the matching sub-block of ``B`` is selected.
     """
-    idx = validate_measurement_subset(msm_subset, A_tensor, n_measurements, B.device)
+    idx = validate_measurement_subset(msm_subset, A_tensor, B.device)
     if idx.ndim == 1:
         # Shared index set: B_sub = B[I][:, I], (m_sub, m_sub).
         B_sub = B.index_select(0, idx).index_select(1, idx)

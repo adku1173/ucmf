@@ -121,7 +121,6 @@ def test_per_sample_measurement_subset_matches_subblock_solvers():
     [
         (torch.tensor([0.0, 1.0, 2.0, 3.0]), 'integer tensor'),
         (torch.tensor([0, 1, 2]), 'must match A measurement dim'),
-        (torch.tensor([0, 1, 2, 9]), r'lie in \[0, 6\)'),
         (torch.zeros(2, 2, 2, dtype=torch.long), '1D or 2D'),
         (torch.tensor([[0, 1, 2, 3]]), 'requires batched A'),
     ],
