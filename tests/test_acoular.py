@@ -1,11 +1,12 @@
 """Acoular solver adapters solve the same problem as Acoular's LassoLars solver."""
 
-import numpy as np
-import pytest
-import torch
 from acoular.solvers import L1RegularizedLeastSquaresProblem, LassoLarsSolver
 
 from ucmf.acoular import FISTATorchSolver, ISTATorchSolver
+
+import numpy as np
+import pytest
+import torch
 
 
 def _problem(solver):

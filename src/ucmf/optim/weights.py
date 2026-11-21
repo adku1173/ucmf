@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import torch
-
 from .utils import validate_tensor
+
+import torch
 
 
 def validate_gradient_weight_shape(W: torch.Tensor, A_tensor: torch.Tensor, y: torch.Tensor):

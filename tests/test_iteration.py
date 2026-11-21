@@ -1,11 +1,11 @@
 """Explicit loops retain scheduling, recurrent autograd, and callback behavior."""
 
-import pytest
-import torch
-
 from ucmf import FISTA, ISTA
 from ucmf.optim import IntermediateOutputCollector, IterationCallback
 from ucmf.optim.weights import prepare_gradient_weight
+
+import pytest
+import torch
 
 
 def scheduled_reference(A, y, x0, gammas, thetas, *, accelerated, x_shift=0.0):

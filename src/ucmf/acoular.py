@@ -19,16 +19,20 @@ receives data multiplied by ``problem.unit_mult``, and the solver uses
 ``||y - A x||² / (2 m) + lam * ||x||₁`` equals scikit-learn's Lasso
 objective, results are directly comparable to ``LassoLarsSolver`` with
 ``fit_intercept=False``.
+
+Import Acoular before ``ucmf`` (``import acoular`` first): ``ucmf`` loads
+NumPy via PyTorch, and Acoular must be loaded before NumPy.
 """
 
 from abc import abstractmethod
 
-import torch
 from acoular.internal import digest
 from acoular.solvers import LeastSquaresSolver, SolverOutput
-from traits.api import Enum, Float, Int, Property, Str, cached_property
 
 from .optim import FISTA, ISTA, SolutionChangeStopper
+
+import torch
+from traits.api import Enum, Float, Int, Property, Str, cached_property
 
 
 class TorchSolver(LeastSquaresSolver):

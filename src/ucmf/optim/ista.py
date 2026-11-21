@@ -16,10 +16,6 @@ With support for:
 
 import math
 
-import torch
-import torch.nn.functional as F
-from torch import nn
-
 from .utils import (
     apply_adjoint_operator,
     apply_forward_operator,
@@ -30,6 +26,10 @@ from .utils import (
     validate_tensor,
 )
 from .weights import prepare_gradient_weight
+
+import torch
+import torch.nn.functional as F
+from torch import nn
 
 
 class ISTA(nn.Module):

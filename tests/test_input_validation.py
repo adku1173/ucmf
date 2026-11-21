@@ -1,11 +1,11 @@
 """Forward validates caller-prepared tensors before any solver iteration."""
 
+from ucmf import FISTA, ISTA
+from ucmf.optim import IterationCallback
+
 import numpy as np
 import pytest
 import torch
-
-from ucmf import FISTA, ISTA
-from ucmf.optim import IterationCallback
 
 
 @pytest.mark.parametrize('solver_type', [ISTA, FISTA])

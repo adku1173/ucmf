@@ -1,8 +1,11 @@
 """Test-only subclasses demonstrating subclass ownership of a weighted forward."""
 
-import pytest
+# Acoular must be loaded before NumPy (imported via ucmf/torch).
+import acoular  # noqa: F401
 
 from ucmf import FISTA, ISTA
+
+import pytest
 
 
 class _WeightedForward:

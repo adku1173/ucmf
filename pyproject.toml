@@ -35,5 +35,12 @@ line-length = 120
 [tool.ruff.lint]
 select = ["E", "F", "I", "B"]
 
+# Acoular must be imported before NumPy (numba/OpenBLAS threading), as in Acoular itself.
+[tool.ruff.lint.isort]
+section-order = ["future", "standard-library", "acoular", "first-party", "local-folder", "third-party"]
+
+[tool.ruff.lint.isort.sections]
+acoular = ["acoular"]
+
 [tool.ruff.format]
 quote-style = "single"

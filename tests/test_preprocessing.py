@@ -1,10 +1,10 @@
 """Explicit column normalization and source-coordinate transformations."""
 
+from ucmf.optim import normalize_sensing_matrix_columns
+
 import numpy as np
 import pytest
 import torch
-
-from ucmf.optim import normalize_sensing_matrix_columns
 
 
 @pytest.mark.parametrize('batched', [True, False])

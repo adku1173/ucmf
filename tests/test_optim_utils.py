@@ -1,9 +1,5 @@
 """Standalone solver utilities preserve batching and autograd behavior."""
 
-import numpy as np
-import pytest
-import torch
-
 from ucmf.optim.utils import (
     apply_adjoint_operator,
     apply_forward_operator,
@@ -14,6 +10,10 @@ from ucmf.optim.utils import (
     validate_shapes,
     validate_tensor,
 )
+
+import numpy as np
+import pytest
+import torch
 
 
 @pytest.mark.parametrize('batched', [False, True])

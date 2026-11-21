@@ -3,11 +3,11 @@
 import inspect
 import math
 
+from ucmf import FISTA, ISTA
+
 import numpy as np
 import pytest
 import torch
-
-from ucmf import FISTA, ISTA
 
 SOLVERS = [ISTA, FISTA]
 

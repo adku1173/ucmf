@@ -2,12 +2,12 @@
 
 import math
 
+from ucmf import FISTA, ISTA
+from ucmf.optim import IterationCallback
+
 import numpy as np
 import pytest
 import torch
-
-from ucmf import FISTA, ISTA
-from ucmf.optim import IterationCallback
 
 
 def weighted_numpy_reference(A, W, y, x0, lam, gamma, *, positive, accelerated):

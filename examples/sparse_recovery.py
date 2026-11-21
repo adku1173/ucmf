@@ -9,10 +9,11 @@ Run from the repository root: uv run python examples/sparse_recovery.py
 from pathlib import Path
 
 import acoular as ac
-import matplotlib.pyplot as plt
 from acoular.solvers import L1RegularizedLeastSquaresProblem, LassoLarsSolver
 
 from ucmf.acoular import FISTATorchSolver, ISTATorchSolver
+
+import matplotlib.pyplot as plt
 
 ac.config.global_caching = 'none'
 

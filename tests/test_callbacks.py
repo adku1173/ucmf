@@ -2,9 +2,6 @@
 
 from types import SimpleNamespace
 
-import pytest
-import torch
-
 from ucmf import FISTA, ISTA
 from ucmf.optim import (
     IntermediateOutputCollector,
@@ -12,6 +9,9 @@ from ucmf.optim import (
     SolutionChangeStopper,
     StepParamCollector,
 )
+
+import pytest
+import torch
 
 
 @pytest.mark.parametrize('solver_type', [ISTA, FISTA])
