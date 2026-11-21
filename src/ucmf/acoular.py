@@ -32,7 +32,7 @@ from acoular.solvers import LeastSquaresSolver, SolverOutput
 from .optim import FISTA, ISTA, SolutionChangeStopper
 
 import torch
-from traits.api import Enum, Float, Int, Property, Str, cached_property
+from traits.api import Enum, Float, Int, Property, Str, Union, cached_property
 
 
 class TorchSolver(LeastSquaresSolver):
@@ -50,14 +50,19 @@ class TorchSolver(LeastSquaresSolver):
     #: Floating-point precision of the solve.
     precision = Enum('float64', 'float32')
 
-    #: Maximum number of iterations per frequency bin.
+    #: Number of iterations per frequency bin (maximum if :attr:`tol` is set).
     n_iter = Int(5000)
 
-    #: Relative solution-change tolerance for early stopping.
-    tol = Float(1e-8)
+    #: Optional relative solution-change tolerance for early stopping via
+    #: :class:`ucmf.optim.SolutionChangeStopper`. ``None`` (default) runs exactly
+    #: :attr:`n_iter` iterations without callbacks.
+    tol = Union(None, Float)
+
+    #: Number of steps between stopping checks if :attr:`tol` is set.
+    check_every = Int(100)
 
     #: Unique identifier for this solver configuration. (read-only)
-    digest = Property(depends_on=['device', 'precision', 'n_iter', 'tol'])
+    digest = Property(depends_on=['device', 'precision', 'n_iter', 'tol', 'check_every'])
 
     @cached_property
     def _get_digest(self):
@@ -68,19 +73,21 @@ class TorchSolver(LeastSquaresSolver):
         """Return the ucmf solver module used for one solve."""
 
     def solve(self, problem, dictionary_matrix, data, start_value=None):
-        """Solve one frequency bin and report the number of iterations in ``info``."""
+        """Solve one frequency bin.
+
+        With :attr:`tol` set, ``info`` reports ``n_steps`` and ``converged``;
+        otherwise it is empty.
+        """
         dtype = getattr(torch, self.precision)
         A = torch.as_tensor(dictionary_matrix, dtype=dtype, device=self.device)
         y = torch.as_tensor(data, dtype=dtype, device=self.device)
         x0 = None if start_value is None else torch.as_tensor(start_value, dtype=dtype, device=self.device)
-        stopper = SolutionChangeStopper(tol=self.tol)
-        solver = self._create_solver(positive=problem.nonnegative, callbacks=[stopper])
+        stopper = None if self.tol is None else SolutionChangeStopper(tol=self.tol, check_every=self.check_every)
+        solver = self._create_solver(positive=problem.nonnegative, callbacks=[] if stopper is None else [stopper])
         with torch.no_grad():
             x = solver(y, x0=x0, t=self.n_iter, A=A, lam=problem.alpha * problem.unit_mult)
-        return SolverOutput(
-            solution=x[0].cpu().numpy(),
-            info={'n_steps': stopper.n_steps, 'converged': stopper.converged},
-        )
+        info = {} if stopper is None else {'n_steps': stopper.n_steps, 'converged': stopper.converged}
+        return SolverOutput(solution=x[0].cpu().numpy(), info=info)
 
 
 class ISTATorchSolver(TorchSolver):

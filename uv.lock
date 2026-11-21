@@ -1251,6 +1251,19 @@ wheels = [
 ]
 
 [[package]]
+name = "pylops"
+version = "2.9.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/75/e8/685c6d3fed166ff5b24c71c68d2ab70f95567e55961791f8f574d49ab939/pylops-2.9.0.tar.gz", hash = "sha256:8cf028b6db3b9e2520d02ec75b7187346f2fd6788dc5079a9baba51d4b8a8f76", size = 50460204, upload-time = "2026-11-12T20:52:24.759Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/dd/2a/2aae0e24d218e7042abd3147c72455e1bd29fac2e202b020f54d7400525c/pylops-2.9.0-py3-none-any.whl", hash = "sha256:22e9ae3e21544f22eb88dc2bd8f1f67ab7a77c397151944f057f8f94efc76a11", size = 396015, upload-time = "2026-11-12T20:52:22.455Z" },
+]
+
+[[package]]
 name = "pyparsing"
 version = "3.3.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1637,12 +1650,16 @@ dependencies = [
 dev = [
     { name = "acoular" },
     { name = "matplotlib" },
+    { name = "pylops" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "threadpoolctl" },
 ]
 examples = [
     { name = "acoular" },
     { name = "matplotlib" },
+    { name = "pylops" },
+    { name = "threadpoolctl" },
 ]
 
 [package.metadata]
@@ -1655,10 +1672,14 @@ requires-dist = [
 dev = [
     { name = "acoular", git = "https://github.com/acoular/acoular.git?branch=cmf-problem-assembly" },
     { name = "matplotlib" },
+    { name = "pylops" },
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.9" },
+    { name = "threadpoolctl" },
 ]
 examples = [
     { name = "acoular", git = "https://github.com/acoular/acoular.git?branch=cmf-problem-assembly" },
     { name = "matplotlib" },
+    { name = "pylops" },
+    { name = "threadpoolctl" },
 ]

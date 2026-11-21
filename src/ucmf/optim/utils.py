@@ -101,12 +101,16 @@ def apply_adjoint_operator(v, Op):
 def default_gamma_from_A(A):
     """Return the step size ``m / ||A||_2**2`` for normalized least squares.
 
-    Uses the spectral norm of a shared or batched sensing matrix, returning a
-    scalar or a tensor of shape ``(B,)`` respectively. The computation does not
-    track gradients. Zero or non-finite squared spectral norms raise ValueError.
+    Uses the squared spectral norm of a shared or batched sensing matrix,
+    returning a scalar or a tensor of shape ``(B,)`` respectively. It is the
+    largest eigenvalue of the smaller Gram matrix (``A.T @ A`` or ``A @ A.T``);
+    a symmetric eigensolver is much faster than an SVD, especially on GPUs.
+    The computation does not track gradients. Zero or non-finite squared
+    spectral norms raise ValueError.
     """
     with torch.no_grad():
-        L = torch.linalg.norm(A, ord=2, dim=(-2, -1)) ** 2 / float(A.shape[-2])
+        gram = A.mT @ A if A.shape[-1] <= A.shape[-2] else A @ A.mT
+        L = torch.linalg.eigvalsh(gram)[..., -1] / float(A.shape[-2])
         if torch.any(~torch.isfinite(L) | (L <= 0)):
             msg = 'A must have a finite, nonzero spectral norm when gamma is omitted.'
             raise ValueError(msg)

@@ -6,6 +6,7 @@ the custom torch solvers with Acoular's LassoLars solver on the same problem.
 Run from the repository root: uv run python examples/sparse_recovery.py
 """
 
+import time
 from pathlib import Path
 
 import acoular as ac
@@ -34,7 +35,9 @@ ps = ac.PowerSpectra(source=ts, block_size=128, window='Hanning')
 rg = ac.RectGrid(x_min=-0.2, x_max=0.2, y_min=-0.2, y_max=0.2, z=-0.3, increment=0.01)
 st = ac.SteeringVector(grid=rg, mics=mg)
 
-# Solve the same L1-regularized CMF problem with three solvers.
+# Solve the same L1-regularized CMF problem with three solvers and time the full
+# computation (including CSM and dictionary assembly). See benchmark_solvers.py
+# for a solver-only runtime comparison.
 solvers = {
     'LassoLars': LassoLarsSolver(backend_kwargs={'fit_intercept': False}),
     'ISTA': ISTATorchSolver(),
@@ -46,11 +49,13 @@ for i, (name, solver) in enumerate(solvers.items(), start=1):
         solver=solver, alpha=1e-9, nonnegative=True, dictionary_scaling='unit_l2'
     )
     bf = ac.BeamformerCMF(freq_data=ps, steer=st, problem=problem)
+    start = time.perf_counter()
     Lm = ac.L_p(bf.synthetic(8000, 3))
+    elapsed = time.perf_counter() - start
 
     plt.subplot(1, 3, i)
     plt.imshow(Lm.T, origin='lower', vmin=Lm.max() - 20, extent=rg.extent, interpolation='nearest')
     plt.colorbar()
-    plt.title(name)
+    plt.title(f'{name} ({elapsed:.1f} s)')
 plt.tight_layout()
 plt.show()

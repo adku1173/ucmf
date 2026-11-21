@@ -106,7 +106,7 @@ def test_custom_callbacks_can_stop_at_either_boundary(solver_type, stop_at):
 
 @pytest.mark.parametrize('solver_type', [ISTA, FISTA])
 def test_stopper_converges_and_resets_between_solves(solver_type):
-    stopper = SolutionChangeStopper(tol=1e-9)
+    stopper = SolutionChangeStopper(tol=1e-9, check_every=1)
     outputs = IntermediateOutputCollector()
     solver = solver_type(callbacks=[stopper, outputs])
     x = solver(torch.ones(2, 3), A=torch.eye(3), lam=0.0, t=100)
@@ -124,8 +124,25 @@ def test_stopper_converges_and_resets_between_solves(solver_type):
     assert len(outputs.intermediates) == 1
 
 
+@pytest.mark.parametrize('solver_type', [ISTA, FISTA])
+def test_stopper_checks_only_every_check_every_steps(solver_type):
+    stopper = SolutionChangeStopper(tol=1e-9, check_every=5)
+    solver = solver_type(callbacks=[stopper])
+    solver(torch.ones(2, 3), A=torch.eye(3), lam=0.0, t=100)
+    assert stopper.converged
+    assert stopper.stop_iter == 4
+    assert stopper.n_steps == 5
+
+    stopper = SolutionChangeStopper(tol=1e-9, check_every=5)
+    solver = solver_type(callbacks=[stopper])
+    solver(torch.ones(2, 3), A=torch.eye(3), lam=0.0, t=3)
+    assert not stopper.converged
+    assert stopper.last_change is None
+    assert stopper.n_steps == 3
+
+
 def test_relative_stopping_requires_every_sample_to_converge():
-    stopper = SolutionChangeStopper(tol=0.01)
+    stopper = SolutionChangeStopper(tol=0.01, check_every=1)
     solver = SimpleNamespace(iter=0, stop=False)
     before = torch.tensor([[1000.0], [0.001]], dtype=torch.float64)
     after = before + torch.tensor([[0.001], [0.0001]], dtype=torch.float64)
@@ -146,14 +163,14 @@ def test_relative_stopping_requires_every_sample_to_converge():
 
 
 def test_absolute_stopping_and_zero_solution_are_finite():
-    stopper = SolutionChangeStopper(tol=0.1, relative=False)
+    stopper = SolutionChangeStopper(tol=0.1, relative=False, check_every=1)
     solver = SimpleNamespace(iter=0, stop=False)
     stopper.on_step_begin(solver, torch.tensor([[0.0], [1000.0]]))
     stopper.on_step_end(solver, torch.tensor([[0.01], [1000.01]]))
     assert solver.stop
     assert torch.isfinite(stopper.last_change).all()
 
-    relative = SolutionChangeStopper()
+    relative = SolutionChangeStopper(check_every=1)
     solver = SimpleNamespace(iter=0, stop=False)
     relative.on_step_begin(solver, torch.zeros(2, 1))
     relative.on_step_end(solver, torch.zeros(2, 1))

@@ -36,9 +36,18 @@ def test_torch_solver_matches_lasso_lars(system, solver_type):
     np.testing.assert_allclose(result.solution, reference, atol=1e-8)
 
 
+def test_without_tol_runs_all_iterations_without_stopper(system):
+    A, y = system
+    result = _problem(FISTATorchSolver(n_iter=50)).solve(A, y)
+    reference = _problem(FISTATorchSolver(n_iter=50, tol=0.0)).solve(A, y)
+    assert result.info == {}
+    assert reference.info == {'n_steps': 50, 'converged': False}
+    np.testing.assert_array_equal(result.solution, reference.solution)
+
+
 def test_start_value_is_used_as_warm_start(system):
     A, y = system
-    problem = _problem(FISTATorchSolver(n_iter=20000, tol=1e-10))
+    problem = _problem(FISTATorchSolver(n_iter=20000, tol=1e-10, check_every=1))
     cold = problem.solve(A, y)
     warm = problem.solve(A, y, start_value=cold.solution * np.linalg.norm(A, axis=0))
     assert warm.info['n_steps'] < cold.info['n_steps']
@@ -47,10 +56,16 @@ def test_start_value_is_used_as_warm_start(system):
 def test_digest_depends_on_algorithm_and_configuration():
     solver = FISTATorchSolver()
     digests = {ISTATorchSolver().digest, solver.digest}
-    for name, value in [('n_iter', 10), ('tol', 1e-3), ('device', 'meta'), ('precision', 'float32')]:
+    for name, value in [
+        ('n_iter', 10),
+        ('tol', 1e-3),
+        ('check_every', 7),
+        ('device', 'meta'),
+        ('precision', 'float32'),
+    ]:
         setattr(solver, name, value)
         digests.add(solver.digest)
-    assert len(digests) == 6
+    assert len(digests) == 7
 
 
 def test_float32_precision_matches_float64(system):

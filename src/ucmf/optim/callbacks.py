@@ -91,12 +91,19 @@ class SolutionChangeStopper(IterationCallback):
     Set ``relative=False`` to use absolute changes. All samples in a batch
     must satisfy the criterion. State resets at iteration zero of each solve.
     ``stop_iter`` is zero-based; ``n_steps`` counts completed steps.
+
+    The criterion is evaluated only for every ``check_every``-th step (after
+    ``check_every``, ``2 * check_every``, ... completed steps), comparing that
+    step's consecutive iterates. Other steps cost no tensor operations and,
+    on GPUs, no host-device synchronization. Stopping can therefore happen up
+    to ``check_every - 1`` steps after the change first fell below ``tol``.
     """
 
-    def __init__(self, tol=1e-6, relative=True, eps=1e-12):
+    def __init__(self, tol=1e-6, relative=True, eps=1e-12, check_every=100):
         self.tol = float(tol)
         self.relative = bool(relative)
         self.eps = float(eps)
+        self.check_every = int(check_every)
         self.reset()
 
     def reset(self):
@@ -113,16 +120,20 @@ class SolutionChangeStopper(IterationCallback):
             return torch.linalg.vector_norm(x).reshape(1)
         return torch.linalg.vector_norm(x.reshape(x.shape[0], -1), dim=1)
 
+    def _is_check_step(self, solver):
+        return (solver.iter + 1) % self.check_every == 0
+
     def on_step_begin(self, solver, x, **kwargs):
-        """Store the pre-step iterate for comparison at step end."""
-        if getattr(solver, 'iter', None) == 0:
+        """Store the pre-step iterate if this step is checked."""
+        if solver.iter == 0:
             self.reset()
-        self.previous = x.detach().clone()
+        if self._is_check_step(solver):
+            self.previous = x.detach().clone()
 
     def on_step_end(self, solver, x, **kwargs):
-        """Request stopping when all iterate changes are below tolerance."""
-        if self.previous is None:
-            self.previous = x.detach().clone()
+        """On checked steps, request stopping when all iterate changes are below tolerance."""
+        self.n_steps = solver.iter + 1
+        if not self._is_check_step(solver):
             return
 
         x_det = x.detach()
@@ -132,8 +143,7 @@ class SolutionChangeStopper(IterationCallback):
             diff = diff / scale.clamp_min(self.eps)
 
         self.last_change = diff.detach().clone()
-        self.n_steps = int(getattr(solver, 'iter', 0)) + 1
         if torch.all(diff < self.tol):
             self.converged = True
-            self.stop_iter = int(getattr(solver, 'iter', self.n_steps - 1))
+            self.stop_iter = solver.iter
             solver.stop = True
