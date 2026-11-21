@@ -170,3 +170,15 @@ def validate_shapes(y, x0, A):
     if x0 is not None and tuple(x0.shape) != (batch_size, n):
         msg = f'x0 has shape {tuple(x0.shape)} but expected {(batch_size, n)}'
         raise ValueError(msg)
+
+
+def validate_unfolded_iterations(t, n_iterations):
+    """Validate the requested depth for a fixed-depth unfolded solver.
+
+    Unfolded models own a fixed stack of trained layers, so ``t`` must be
+    non-negative and may not exceed the available ``n_iterations``.
+    """
+    if t < 0:
+        raise ValueError('t must be non-negative.')
+    if t > n_iterations:
+        raise ValueError(f't ({t}) cannot exceed n_iterations ({n_iterations}).')
