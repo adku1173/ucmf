@@ -101,7 +101,7 @@ diagonal-removal setting, and off-diagonal weights (the source repo uses
 - `IntermediateOutputCollector`: intermediate iterates with their autograd
   graphs, automatically cleared on iteration zero. With `t=0`, no callbacks run.
 
-The solvers have no trainable parameters. Gradients can flow through `y`, `x0`,
+ISTA and FISTA have no trainable parameters. Gradients can flow through `y`, `x0`,
 `lam`, and `gamma`; `A` is treated as fixed and detached. Use `torch.no_grad()`
 for inference if no graph is needed.
 
@@ -209,9 +209,8 @@ Subclasses reuse the gradient/proximal and callback helpers. Learned FISTA
 steps can use `_iterate_accelerated(..., step_params_fn=...)`; recurrent models
 can implement their own loop with local hidden/cell tensors.
 
-See the [architecture guide](docs/architecture.md) for extension examples and
-[domain vocabulary](GLOSSARY.md) for the iteration variables. The earlier
-state-framework hooks are removed. Stateless tensor/operator helpers live in
+See the [architecture guide](docs/architecture.md) for extension examples.
+The earlier state-framework hooks are removed. Stateless tensor/operator helpers live in
 `src/ucmf/optim/utils.py` and are imported directly, not exposed as class aliases.
 
 See [migration notes](docs/migration.md) for scope, provenance, and the later
