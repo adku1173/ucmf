@@ -156,16 +156,17 @@ bf = ac.BeamformerCMF(freq_data=ps, steer=st, problem=problem)
 [`examples/sparse_recovery.py`](examples/sparse_recovery.py) simulates the
 three white-noise sources of Acoular's introductory example in front of the
 64-microphone array and solves the same CMF problem (third-octave band at
-8 kHz, `alpha=1e-9`) with LassoLars, ISTA, and FISTA (5000 iterations each,
-CPU, float64). The titles show the total computation time, including the
-per-bin CSM and dictionary assembly shared by all solvers:
+8 kHz, `alpha=1e-9`) with LassoLars (CPU) and ISTA and FISTA (2000 iterations
+each, CUDA GPU, float64; the example requires a CUDA device). The titles show
+the total computation time, including the per-bin CSM and dictionary assembly
+shared by all solvers:
 
 ![CMF maps of three sources with LassoLars, ISTA, and FISTA](docs/images/three_sources_cmf.png)
 
-FISTA matches the LassoLars map up to a relative difference of about `2e-4`.
-ISTA has not yet converged after 5000 iterations and still yields
+FISTA matches the LassoLars map up to a relative difference of about `8e-4`.
+ISTA has not yet converged after 2000 iterations and still yields
 spatially smeared sources. For this small, very sparse problem, LassoLars
-is faster than 5000 first-order iterations on the CPU.
+on the CPU is still faster than 2000 first-order iterations on the GPU.
 
 ### Benchmark: ucmf vs. PyLops
 
@@ -175,29 +176,30 @@ and dictionary assembly) of ucmf and PyLops ISTA/FISTA on the same problem:
 1000 iterations per frequency bin without early stopping, 5 frequency bins,
 dictionary of 4032 × 1681. PyLops has no non-negativity constraint, so all
 solvers use `nonnegative=False`; PyLops' objective `||y - A x||² + eps ||x||₁`
-matches with `eps = 2 m alpha unit_mult`. Thread counts are set with
+matches with `eps = 2 m alpha unit_mult`. PyLops gets ucmf's default step size
+(its `alpha = gamma / m`), so both run identical iterations. Thread counts are set with
 `torch.set_num_threads` and threadpoolctl (Acoular sets
 `OPENBLAS_NUM_THREADS=1` on import). Results on 2× Intel Xeon Silver 4214R (24 cores) and an RTX 3090:
 
 | Algorithm | Implementation | Threads | Time [s] | Speed-up vs. PyLops (1 thread) | Rel. diff. to PyLops |
 |---|---|---|---|---|---|
-| ISTA | PyLops | 1 | 38.69 | 1.0x | 0 |
-| ISTA | ucmf CPU float64 | 1 | 40.30 | 1.0x | 5.9e-16 |
-| ISTA | PyLops | 24 | 9.95 | 3.9x | 3.6e-16 |
-| ISTA | ucmf CPU float64 | 24 | 5.20 | 7.4x | 4.7e-16 |
-| ISTA | ucmf CUDA float64 | - | 1.40 | 27.7x | 4.7e-16 |
-| ISTA | ucmf CUDA float32 | - | 0.68 | 56.5x | 8.0e-06 |
-| FISTA | PyLops | 1 | 56.08 | 1.0x | 0 |
-| FISTA | ucmf CPU float64 | 1 | 40.76 | 1.4x | 1.4e-13 |
-| FISTA | PyLops | 24 | 12.29 | 4.6x | 1.8e-13 |
-| FISTA | ucmf CPU float64 | 24 | 4.65 | 12.1x | 1.3e-13 |
-| FISTA | ucmf CUDA float64 | - | 1.55 | 36.1x | 9.7e-14 |
-| FISTA | ucmf CUDA float32 | - | 0.81 | 69.0x | 8.4e-04 |
+| ISTA | PyLops | 1 | 37.05 | 1.0x | 0 |
+| ISTA | ucmf CPU float64 | 1 | 36.28 | 1.0x | 5.0e-16 |
+| ISTA | PyLops | 24 | 10.28 | 3.6x | 4.0e-16 |
+| ISTA | ucmf CPU float64 | 24 | 5.25 | 7.1x | 4.4e-16 |
+| ISTA | ucmf CUDA float64 | - | 0.95 | 38.9x | 4.2e-16 |
+| ISTA | ucmf CUDA float32 | - | 0.67 | 55.1x | 2.4e-04 |
+| FISTA | PyLops | 1 | 53.82 | 1.0x | 0 |
+| FISTA | ucmf CPU float64 | 1 | 36.46 | 1.5x | 1.3e-13 |
+| FISTA | PyLops | 24 | 13.08 | 4.1x | 1.4e-13 |
+| FISTA | ucmf CPU float64 | 24 | 4.36 | 12.3x | 2.5e-13 |
+| FISTA | ucmf CUDA float64 | - | 0.97 | 55.4x | 4.6e-13 |
+| FISTA | ucmf CUDA float32 | - | 0.72 | 74.9x | 8.1e-04 |
 
 Both implementations produce the same iterates up to rounding. Single-threaded,
 ISTA runs equally fast in both; PyLops FISTA is slower than PyLops ISTA,
-ucmf FISTA is not. Multi-threaded, ucmf is 1.9–2.6× faster than PyLops, and on
-the GPU another 3–8× faster than its own multi-threaded CPU run.
+ucmf FISTA is not. Multi-threaded, ucmf is 2.0–3.0× faster than PyLops, and on
+the GPU another 4.5–8× faster than its own multi-threaded CPU run.
 
 ## Extending the iteration
 

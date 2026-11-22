@@ -18,6 +18,7 @@ import acoular as ac
 from acoular.solvers import L1RegularizedLeastSquaresProblem, LeastSquaresSolver, SolverBase, SolverOutput
 
 from ucmf.acoular import FISTATorchSolver, ISTATorchSolver
+from ucmf.optim.utils import default_gamma_from_A
 
 import numpy as np
 import torch
@@ -35,14 +36,21 @@ class PylopsSolver(LeastSquaresSolver):
 
     PyLops minimizes ``||y - A x||² + eps ||x||₁``. With ``eps = 2 m lam`` this
     matches ``||y - A x||² / (2 m) + lam ||x||₁`` for ``lam = alpha * unit_mult``.
+    PyLops' step ``x + a A.T (y - A x)`` with threshold ``eps a / 2`` equals the
+    ucmf step ``x + gamma A.T (y - A x) / m`` with threshold ``gamma lam`` for
+    ``a = gamma / m``. Both use ucmf's default ``gamma``, so the iterates agree.
     """
 
     algorithm = Callable()
     n_iter = Int()
 
     def solve(self, problem, dictionary_matrix, data, start_value=None):
-        eps = 2 * dictionary_matrix.shape[0] * problem.alpha * problem.unit_mult
-        x, _, _ = self.algorithm(Op=MatrixMult(dictionary_matrix), y=data, niter=self.n_iter, eps=eps, tol=0.0)
+        m = dictionary_matrix.shape[0]
+        eps = 2 * m * problem.alpha * problem.unit_mult
+        step = float(default_gamma_from_A(torch.from_numpy(dictionary_matrix))) / m
+        x, _, _ = self.algorithm(
+            Op=MatrixMult(dictionary_matrix), y=data, niter=self.n_iter, eps=eps, alpha=step, tol=0.0
+        )
         return SolverOutput(solution=x)
 
 

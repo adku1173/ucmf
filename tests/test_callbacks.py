@@ -22,8 +22,9 @@ def test_default_step_and_threshold_use_normalized_objective(solver_type):
 
     solver(torch.zeros(1, 3), A=A, lam=0.2, t=1)
 
-    torch.testing.assert_close(collector.gammas_tensor, torch.tensor([0.75]))
-    torch.testing.assert_close(collector.thetas_tensor, torch.tensor([0.15]))
+    # gamma = m / (1.05 * ||A||_2**2) = 3 / (1.05 * 4); theta = lam * gamma.
+    torch.testing.assert_close(collector.gammas_tensor, torch.tensor([0.75 / 1.05]))
+    torch.testing.assert_close(collector.thetas_tensor, torch.tensor([0.15 / 1.05]))
 
 
 @pytest.mark.parametrize('gamma', [0.25, torch.tensor(0.25), [0.25, 0.5]])
@@ -97,7 +98,8 @@ def test_custom_callbacks_can_stop_at_either_boundary(solver_type, stop_at):
             if stop_at == 'end':
                 solver.stop = True
 
-    actual = solver_type(callbacks=[Stop(), outputs])(torch.ones(2), A=torch.eye(2), lam=0.0, t=8)
+    # gamma = m / ||A||_2**2 = 2: one step solves A = I exactly.
+    actual = solver_type(callbacks=[Stop(), outputs])(torch.ones(2), A=torch.eye(2), lam=0.0, gamma=2.0, t=8)
 
     completed = 0 if stop_at == 'begin' else 1
     assert len(outputs.intermediates) == completed
@@ -109,7 +111,8 @@ def test_stopper_converges_and_resets_between_solves(solver_type):
     stopper = SolutionChangeStopper(tol=1e-9, check_every=1)
     outputs = IntermediateOutputCollector()
     solver = solver_type(callbacks=[stopper, outputs])
-    x = solver(torch.ones(2, 3), A=torch.eye(3), lam=0.0, t=100)
+    # gamma = m / ||A||_2**2 = 3: one step solves A = I exactly.
+    x = solver(torch.ones(2, 3), A=torch.eye(3), lam=0.0, gamma=3.0, t=100)
 
     torch.testing.assert_close(x, torch.ones(2, 3))
     assert stopper.converged
@@ -117,7 +120,7 @@ def test_stopper_converges_and_resets_between_solves(solver_type):
     assert stopper.n_steps == 2
     assert len(outputs.intermediates) == 2
 
-    solver(torch.zeros(2, 3), A=torch.eye(3), lam=0.0, t=100)
+    solver(torch.zeros(2, 3), A=torch.eye(3), lam=0.0, gamma=3.0, t=100)
     assert stopper.converged
     assert stopper.stop_iter == 0
     assert stopper.n_steps == 1
@@ -128,14 +131,14 @@ def test_stopper_converges_and_resets_between_solves(solver_type):
 def test_stopper_checks_only_every_check_every_steps(solver_type):
     stopper = SolutionChangeStopper(tol=1e-9, check_every=5)
     solver = solver_type(callbacks=[stopper])
-    solver(torch.ones(2, 3), A=torch.eye(3), lam=0.0, t=100)
+    solver(torch.ones(2, 3), A=torch.eye(3), lam=0.0, gamma=3.0, t=100)
     assert stopper.converged
     assert stopper.stop_iter == 4
     assert stopper.n_steps == 5
 
     stopper = SolutionChangeStopper(tol=1e-9, check_every=5)
     solver = solver_type(callbacks=[stopper])
-    solver(torch.ones(2, 3), A=torch.eye(3), lam=0.0, t=3)
+    solver(torch.ones(2, 3), A=torch.eye(3), lam=0.0, gamma=3.0, t=3)
     assert not stopper.converged
     assert stopper.last_change is None
     assert stopper.n_steps == 3

@@ -4,6 +4,7 @@ from ucmf.optim.utils import (
     apply_adjoint_operator,
     apply_forward_operator,
     default_gamma_from_A,
+    estimate_squared_spectral_norm,
     prepare_sensing_matrix,
     resolve_batch_param,
     to_batch_vector,
@@ -84,14 +85,53 @@ def test_sensing_matrix_is_detached_contiguous_without_conversion():
 
 @pytest.mark.parametrize('batched', [False, True])
 def test_default_step_size_uses_spectral_norm_without_autograd(batched):
+    # ||A||_2**2 = 4 (and 16), m = 2, safety 1.05: gamma = m / (1.05 * ||A||_2**2).
     A = torch.diag(torch.tensor([2.0, 1.0]))
     if batched:
         A = torch.stack([A, 2 * A])
     A.requires_grad_()
-    expected = torch.tensor([0.5, 0.125]) if batched else torch.tensor(0.5)
+    expected = torch.tensor([2 / 4.2, 2 / 16.8]) if batched else torch.tensor(2 / 4.2)
     result = default_gamma_from_A(A)
     torch.testing.assert_close(result, expected)
     assert not result.requires_grad
+
+
+@pytest.mark.parametrize('batched', [False, True])
+def test_power_iteration_estimates_squared_spectral_norm_from_below(batched):
+    # Accuracy depends on the gap sigma_2 / sigma_1 (here 0.8 by construction);
+    # generic random matrices may converge much more slowly.
+    torch.manual_seed(1)
+    batch = (3,) if batched else ()
+    U = torch.linalg.qr(torch.randn(*batch, 40, 25, dtype=torch.float64)).Q
+    V = torch.linalg.qr(torch.randn(*batch, 25, 25, dtype=torch.float64)).Q
+    sigma = torch.linspace(0.8, 0.1, 25, dtype=torch.float64)
+    sigma[0] = 1.0
+    A = (U * sigma) @ V.mT
+    A.requires_grad_()
+    estimate = estimate_squared_spectral_norm(A)
+    assert estimate.shape == batch
+    assert not estimate.requires_grad
+    torch.testing.assert_close(estimate, torch.ones(batch, dtype=torch.float64), rtol=1e-12, atol=0)
+
+
+def test_power_iteration_is_a_lower_bound_for_random_matrices():
+    torch.manual_seed(1)
+    A = torch.randn(20, 40, 25, dtype=torch.float64)
+    exact = torch.linalg.matrix_norm(A, ord=2) ** 2
+    assert torch.all(estimate_squared_spectral_norm(A) <= exact * (1 + 1e-12))  # Rayleigh quotient
+
+
+def test_power_iteration_is_exact_for_diagonal_matrix():
+    A = torch.diag(torch.tensor([3.0, 1.0, 0.5], dtype=torch.float64))
+    torch.testing.assert_close(estimate_squared_spectral_norm(A), torch.tensor(9.0, dtype=torch.float64))
+
+
+def test_power_iteration_is_deterministic_and_leaves_global_rng_untouched():
+    A = torch.randn(30, 20, dtype=torch.float64)
+    state = torch.get_rng_state()
+    first = estimate_squared_spectral_norm(A)
+    assert torch.equal(torch.get_rng_state(), state)
+    assert torch.equal(estimate_squared_spectral_norm(A), first)
 
 
 def test_tensor_validation_does_not_modify_input_or_autograd():

@@ -4,6 +4,7 @@ import inspect
 import math
 
 from ucmf import FISTA, ISTA
+from ucmf.optim.utils import default_gamma_from_A
 
 import numpy as np
 import pytest
@@ -13,11 +14,16 @@ SOLVERS = [ISTA, FISTA]
 
 
 def numpy_reference(A, y, x0, lam, gamma, *, steps, positive, accelerated):
-    """Independent, sample-wise matrix-vector implementation in NumPy."""
+    """Independent, sample-wise matrix-vector implementation in NumPy.
+
+    The default step is taken from ucmf (power-iteration estimate for the whole,
+    possibly batched A); its formula is tested separately in test_optim_utils.
+    """
+    default_steps = np.broadcast_to(default_gamma_from_A(torch.from_numpy(A)).numpy(), (len(y),))
     solutions = []
     for sample, observation in enumerate(y):
         matrix = A if A.ndim == 2 else A[sample]
-        step = matrix.shape[0] / np.linalg.norm(matrix, ord=2) ** 2 if gamma is None else gamma[sample]
+        step = default_steps[sample] if gamma is None else gamma[sample]
         x = x0[sample].copy()
         extrapolated = x.copy()
         momentum = 1.0
@@ -145,7 +151,8 @@ def test_sensing_matrix_is_fixed_but_measurements_remain_differentiable(solver_t
     A = torch.eye(2, requires_grad=True)
     y = torch.ones(1, 2, requires_grad=True)
     solver = solver_type()
-    solver(y, A=A, lam=0.0, t=2).sum().backward()
+    # gamma = m / ||A||_2**2 = 2: each step solves A = I exactly.
+    solver(y, A=A, lam=0.0, gamma=2.0, t=2).sum().backward()
 
     assert A.grad is None
     torch.testing.assert_close(y.grad, torch.ones_like(y))

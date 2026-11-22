@@ -99,23 +99,49 @@ def apply_adjoint_operator(v, Op):
     return torch.bmm(v.unsqueeze(1), Op).squeeze(1)
 
 
-def default_gamma_from_A(A):
-    """Return the step size ``m / ||A||_2**2`` for normalized least squares.
+DEFAULT_GAMMA_SAFETY = 1.05
 
-    Uses the squared spectral norm of a shared or batched sensing matrix,
-    returning a scalar or a tensor of shape ``(B,)`` respectively. It is the
-    largest eigenvalue of the smaller Gram matrix (``A.T @ A`` or ``A @ A.T``);
-    a symmetric eigensolver is much faster than an SVD, especially on GPUs.
-    The computation does not track gradients. Zero or non-finite squared
-    spectral norms raise ValueError.
+
+def default_gamma_from_A(A):
+    """Return the step size ``1 / L`` for normalized least squares.
+
+    ``L = 1.05 * ||A||_2**2 / m`` is the Lipschitz constant of the normalized
+    data term's gradient, with ``||A||_2**2`` estimated by 50 power iterations
+    (:func:`estimate_squared_spectral_norm`). The estimate is a lower bound;
+    the safety factor 1.05 keeps ``gamma <= m / ||A||_2**2`` in typical cases
+    (power iteration converges slowly when the top singular values are close).
+    Shared or batched ``A`` give a scalar or ``(B,)`` tensor. No gradients are
+    tracked. Zero or non-finite estimates raise ValueError.
     """
-    with torch.no_grad():
-        gram = A.mT @ A if A.shape[-1] <= A.shape[-2] else A @ A.mT
-        L = torch.linalg.eigvalsh(gram)[..., -1] / float(A.shape[-2])
-        if torch.any(~torch.isfinite(L) | (L <= 0)):
-            msg = 'A must have a finite, nonzero spectral norm when gamma is omitted.'
-            raise ValueError(msg)
+    L = DEFAULT_GAMMA_SAFETY * estimate_squared_spectral_norm(A) / float(A.shape[-2])
+    if torch.any(~torch.isfinite(L) | (L <= 0)):
+        msg = 'A must have a finite, nonzero spectral norm when gamma is omitted.'
+        raise ValueError(msg)
     return 1.0 / L
+
+
+@torch.no_grad()
+def estimate_squared_spectral_norm(A, n_iter=50, seed=0):
+    """Estimate ``||A||_2**2`` by power iteration on ``A.T @ A``.
+
+    Works for a shared ``(m, n)`` or batched ``(B, m, n)`` matrix and returns a
+    scalar or a ``(B,)`` tensor. The result is the Rayleigh quotient
+    ``||A v||**2`` of the final unit vector ``v``, i.e. a lower bound of the
+    exact value; callers needing a safe Lipschitz bound apply a safety factor.
+
+    The start vector is drawn from a dedicated CPU generator seeded with
+    ``seed``: results are deterministic and the global RNG is not consumed.
+    A fixed ``n_iter`` (no tolerance check) avoids host-device syncs.
+    """
+    generator = torch.Generator().manual_seed(seed)
+    v = torch.randn(*A.shape[:-2], A.shape[-1], 1, generator=generator, dtype=A.dtype).to(A.device)
+    v = v / torch.linalg.vector_norm(v, dim=-2, keepdim=True)
+    for _ in range(n_iter):
+        # v <- A.T A v / ||A.T A v||, (..., n, 1)
+        v = A.mT @ (A @ v)
+        v = v / torch.linalg.vector_norm(v, dim=-2, keepdim=True)
+    # Rayleigh quotient v.T A.T A v = ||A v||**2 for unit v.
+    return torch.linalg.vector_norm(A @ v, dim=(-2, -1)) ** 2
 
 
 def resolve_batch_param(value, batch_size, name):

@@ -4,6 +4,7 @@ import math
 
 from ucmf import FISTA, ISTA
 from ucmf.optim import IterationCallback
+from ucmf.optim.utils import default_gamma_from_A
 
 import numpy as np
 import pytest
@@ -11,12 +12,16 @@ import torch
 
 
 def weighted_numpy_reference(A, W, y, x0, lam, gamma, *, positive, accelerated):
-    """Independent weighted-update oracle, not a classical LASSO solver."""
+    """Independent weighted-update oracle, not a classical LASSO solver.
+
+    The default step is taken from ucmf (power-iteration estimate for the whole A).
+    """
+    default_steps = np.broadcast_to(default_gamma_from_A(torch.from_numpy(A)).numpy(), (len(y),))
     solutions = []
     for sample, observation in enumerate(y):
         matrix = A if A.ndim == 2 else A[sample]
         weight = W if W.ndim == 2 else W[sample]
-        step = matrix.shape[0] / np.linalg.norm(matrix, ord=2) ** 2 if gamma is None else gamma[sample]
+        step = default_steps[sample] if gamma is None else gamma[sample]
         x = x0[sample].copy()
         z = x.copy()
         tk = 1.0

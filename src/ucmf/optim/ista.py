@@ -234,7 +234,8 @@ class ISTA(nn.Module):
             lam (float | Tensor | None): required regularization
                 strength, scalar or per-sample with shape ``(B,)`` / ``(B, 1)``.
             gamma (float | Tensor | None): scalar or per-sample
-                step size. Defaults to ``m / ||A||_2**2`` for LS.
+                step size. Defaults to ``1 / L`` with ``L = 1.05 * ||A||_2**2 / m``
+                (power-iteration estimate, see ``default_gamma_from_A``).
 
         Returns
         -------

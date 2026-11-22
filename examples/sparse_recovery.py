@@ -40,8 +40,8 @@ st = ac.SteeringVector(grid=rg, mics=mg)
 # for a solver-only runtime comparison.
 solvers = {
     'LassoLars': LassoLarsSolver(backend_kwargs={'fit_intercept': False}),
-    'ISTA': ISTATorchSolver(),
-    'FISTA': FISTATorchSolver(),
+    'ISTA': ISTATorchSolver(device='cuda', n_iter=2000),
+    'FISTA': FISTATorchSolver(device='cuda', n_iter=2000),
 }
 plt.figure(figsize=(12, 3.5))
 for i, (name, solver) in enumerate(solvers.items(), start=1):
