@@ -93,7 +93,7 @@ def run(solver):
     return timed.elapsed, result
 
 
-n_threads = torch.get_num_threads()
+num_threads = torch.get_num_threads()
 cpu_solvers = {
     'PyLops': {
         'ISTA': PylopsSolver(algorithm=ista, n_iter=N_ITER),
@@ -102,7 +102,7 @@ cpu_solvers = {
     'ucmf CPU float64': {'ISTA': ISTATorchSolver(n_iter=N_ITER), 'FISTA': FISTATorchSolver(n_iter=N_ITER)},
 }
 results = {}
-for threads in (1, n_threads):
+for threads in (1, num_threads):
     torch.set_num_threads(threads)
     with threadpool_limits(limits=threads, user_api='blas'):
         for name, solvers in cpu_solvers.items():

@@ -2,8 +2,8 @@
 
 A model case returns ``(make_model, dense_weights)``:
 
-- ``make_model(n_mics, r_diag, **kwargs)`` builds the model for a full array of
-  ``n_mics`` microphones; ``kwargs`` are the common constructor arguments.
+- ``make_model(num_mics, r_diag, **kwargs)`` builds the model for a full array of
+  ``num_mics`` microphones; ``kwargs`` are the common constructor arguments.
 - ``dense_weights(model, operator)`` returns the dense matrices ``(M, P, Q)`` on
   the active measurement rows, differentiable in the model parameters. The
   model's update direction is ``(M.T @ y - P.T @ (Q @ z)) / m``.
@@ -25,16 +25,16 @@ from ucmf.optim.operator import CMFDictionary, CMFPropagation, HermitianVectoriz
 import torch
 from pytest_cases import case, parametrize
 
-N_MICS = 4
-N_SOURCES = 3
+NUM_MICS = 4
+NUM_SOURCES = 3
 BATCH = 2
 T = 4
 
 
 def build_model(make_model, r_diag=False, *, positive=False, gamma_init=0.3, theta_init=0.01, **kwargs):
-    """Float64 model with identity auxiliary weights for the full array of ``N_MICS``."""
+    """Float64 model with identity auxiliary weights for the full array of ``NUM_MICS``."""
     model = make_model(
-        N_MICS, r_diag, n_iterations=T, gamma_init=gamma_init, theta_init=theta_init, positive=positive, **kwargs
+        NUM_MICS, r_diag, num_iterations=T, gamma_init=gamma_init, theta_init=theta_init, positive=positive, **kwargs
     )
     return model.double()
 
@@ -73,10 +73,10 @@ def restrict(B, rows):
     return B[rows.unsqueeze(-1), rows.unsqueeze(-2)]
 
 
-def congruence_weight(Br_re, Br_im, n_mics, r_diag):
+def congruence_weight(Br_re, Br_im, num_mics, r_diag):
     """Dense ``B`` with ``B v = hvec(Br hvec*(v) Br^H)`` on the full CMF basis."""
-    hvec = HermitianVectorization(n_mics, r_diag=r_diag)
-    basis = torch.eye(hvec.n_measurements, dtype=Br_re.dtype)
+    hvec = HermitianVectorization(num_mics, r_diag=r_diag)
+    basis = torch.eye(hvec.num_measurements, dtype=Br_re.dtype)
     Br = torch.complex(Br_re, Br_im)
     weighted = Br @ torch.complex(*hvec.adjoint(basis)) @ Br.mH
     return hvec(weighted.real, weighted.imag).mT
@@ -103,8 +103,8 @@ def reference_iterates(M, P, Q, y, x0, gammas, thetas, positive):
 class UnfoldedModelCases:
     @case(tags=('dense', 'weight_mode'))
     def case_sw(self):
-        def make_model(n_mics, r_diag, **kwargs):
-            return AdaLFISTASW(n_measurements=n_mics * (n_mics - int(r_diag)), **kwargs)
+        def make_model(num_mics, r_diag, **kwargs):
+            return AdaLFISTASW(num_measurements=num_mics * (num_mics - int(r_diag)), **kwargs)
 
         def dense_weights(model, operator):
             A = dense_matrix(operator)
@@ -115,8 +115,8 @@ class UnfoldedModelCases:
 
     @case(tags=('dense', 'weight_mode', 'two_weights'))
     def case_lfista(self):
-        def make_model(n_mics, r_diag, **kwargs):
-            return AdaLFISTA(n_measurements=n_mics * (n_mics - int(r_diag)), **kwargs)
+        def make_model(num_mics, r_diag, **kwargs):
+            return AdaLFISTA(num_measurements=num_mics * (num_mics - int(r_diag)), **kwargs)
 
         def dense_weights(model, operator):
             A = dense_matrix(operator)
@@ -128,12 +128,12 @@ class UnfoldedModelCases:
 
     @case(tags='cmf_only')
     def case_swr(self):
-        def make_model(n_mics, r_diag, **kwargs):
-            return AdaLFISTASWR(n_mics=n_mics, r_diag=r_diag, **kwargs)
+        def make_model(num_mics, r_diag, **kwargs):
+            return AdaLFISTASWR(num_mics=num_mics, r_diag=r_diag, **kwargs)
 
         def dense_weights(model, operator):
             A = dense_matrix(operator)
-            B = congruence_weight(model.Br_re, model.Br_im, model.n_mics, model.r_diag)
+            B = congruence_weight(model.Br_re, model.Br_im, model.num_mics, model.r_diag)
             W = restrict(B, operator.rows) @ A
             return W, W, A
 
@@ -141,13 +141,13 @@ class UnfoldedModelCases:
 
     @case(tags=('cmf_only', 'two_weights'))
     def case_r(self):
-        def make_model(n_mics, r_diag, **kwargs):
-            return AdaLFISTAR(n_mics=n_mics, r_diag=r_diag, **kwargs)
+        def make_model(num_mics, r_diag, **kwargs):
+            return AdaLFISTAR(num_mics=num_mics, r_diag=r_diag, **kwargs)
 
         def dense_weights(model, operator):
             A = dense_matrix(operator)
-            B1 = congruence_weight(model.Br1_re, model.Br1_im, model.n_mics, model.r_diag)
-            B2 = congruence_weight(model.Br2_re, model.Br2_im, model.n_mics, model.r_diag)
+            B1 = congruence_weight(model.Br1_re, model.Br1_im, model.num_mics, model.r_diag)
+            B2 = congruence_weight(model.Br2_re, model.Br2_im, model.num_mics, model.r_diag)
             R = restrict(B1, operator.rows) @ A
             M = restrict(B2, operator.rows) @ A
             return M, R, R
@@ -173,7 +173,7 @@ def _with_data(operator, rng):
 
 def _cmf_problem(operator_type, batched_H, mics, r_diag):
     rng = torch.Generator().manual_seed(11)
-    shape = (BATCH, N_MICS, N_SOURCES) if batched_H else (N_MICS, N_SOURCES)
+    shape = (BATCH, NUM_MICS, NUM_SOURCES) if batched_H else (NUM_MICS, NUM_SOURCES)
     H = torch.randn(shape, dtype=torch.complex128, generator=rng).requires_grad_()
     operator = operator_type(H, r_diag=r_diag)
     if mics is not None:
@@ -202,7 +202,7 @@ class ProblemCases:
     )
     def case_matrix(self, rows):
         rng = torch.Generator().manual_seed(12)
-        A = torch.randn(N_MICS * N_MICS, N_SOURCES, dtype=torch.float64, generator=rng).requires_grad_()
+        A = torch.randn(NUM_MICS * NUM_MICS, NUM_SOURCES, dtype=torch.float64, generator=rng).requires_grad_()
         operator = MatrixMult(A)
         if rows is not None:
             operator = operator.select_rows(torch.tensor(rows))

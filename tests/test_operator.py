@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 import torch
 from pytest_cases import case, parametrize, parametrize_with_cases
-from unfolded_model_cases import N_MICS, UnfoldedModelCases, build_model
+from unfolded_model_cases import NUM_MICS, UnfoldedModelCases, build_model
 
 C = 4
 BATCH_SIZE = 3
@@ -163,7 +163,7 @@ def test_select_rows_matches_row_subset_and_keeps_original_indices(operator, mat
 @parametrize_with_cases('make_model, dense_weights', cases=UnfoldedModelCases)
 def test_model_rejects_mic_subset_from_incompatible_full_array(make_model, dense_weights, operator_type, r_diag):
     model = build_model(make_model, r_diag)
-    H = torch.ones(N_MICS + 1, 3, dtype=torch.complex128)
+    H = torch.ones(NUM_MICS + 1, 3, dtype=torch.complex128)
     operator = operator_type(H, r_diag=r_diag).select_mics(torch.tensor([0, 1, 2]))
     operator = operator.select_mics(torch.tensor([0, 1])).select_columns(torch.tensor([0, 2])).detached()
     y = torch.ones(operator.shape[0], dtype=operator.dtype)
@@ -291,7 +291,7 @@ def random_hermitian(*batch, r_diag=False):
 
 @pytest.mark.parametrize('r_diag', [False, True])
 def test_dimensions(r_diag):
-    assert HermitianVectorization(C, r_diag=r_diag).n_measurements == (C * (C - 1) if r_diag else C * C)
+    assert HermitianVectorization(C, r_diag=r_diag).num_measurements == (C * (C - 1) if r_diag else C * C)
 
 
 @pytest.mark.parametrize('r_diag', [False, True])
@@ -304,7 +304,7 @@ def test_isometry_and_inverse_on_its_domain(r_diag):
     back_real, back_imag = hvec.adjoint(v)
     torch.testing.assert_close(back_real, real)
     torch.testing.assert_close(back_imag, imag)
-    w = torch.randn(3, hvec.n_measurements, dtype=torch.float64)
+    w = torch.randn(3, hvec.num_measurements, dtype=torch.float64)
     torch.testing.assert_close(hvec(*hvec.adjoint(w)), w)
 
 
@@ -313,7 +313,7 @@ def test_adjoint_satisfies_dot_product_test(r_diag):
     """<hvec(S), v> = <S, hvec*(v)>_F for Hermitian S (with diagonal for r_diag=True)."""
     hvec = HermitianVectorization(C, r_diag=r_diag)
     real, imag = random_hermitian(5)
-    v = torch.randn(5, hvec.n_measurements, dtype=torch.float64)
+    v = torch.randn(5, hvec.num_measurements, dtype=torch.float64)
     adj_real, adj_imag = hvec.adjoint(v)
     lhs = (hvec(real, imag) * v).sum(-1)
     rhs = (real * adj_real).sum((-2, -1)) + (imag * adj_imag).sum((-2, -1))

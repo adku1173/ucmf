@@ -175,16 +175,16 @@ def resolve_batch_param(value, batch_size, name):
     raise ValueError(msg)
 
 
-def validate_unfolded_iterations(t, n_iterations):
+def validate_unfolded_iterations(t, num_iterations):
     """Validate the requested depth for a fixed-depth unfolded solver.
 
     Unfolded models own a fixed stack of trained layers, so ``t`` must be
-    non-negative and may not exceed the available ``n_iterations``.
+    non-negative and may not exceed the available ``num_iterations``.
     """
     if t < 0:
         raise ValueError('t must be non-negative.')
-    if t > n_iterations:
-        raise ValueError(f't ({t}) cannot exceed n_iterations ({n_iterations}).')
+    if t > num_iterations:
+        raise ValueError(f't ({t}) cannot exceed num_iterations ({num_iterations}).')
 
 
 def softplus_inverse(value, eps=1e-12):

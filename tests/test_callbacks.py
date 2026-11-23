@@ -123,13 +123,13 @@ def test_stopper_converges_and_resets_between_solves(solver_type):
     torch.testing.assert_close(x, torch.ones(2, 3))
     assert stopper.converged
     assert stopper.stop_iter == 1
-    assert stopper.n_steps == 2
+    assert stopper.num_steps == 2
     assert len(outputs.intermediates) == 2
 
     solver(torch.zeros(2, 3), operator=MatrixMult(torch.eye(3)), lam=0.0, gamma=3.0, t=100)
     assert stopper.converged
     assert stopper.stop_iter == 0
-    assert stopper.n_steps == 1
+    assert stopper.num_steps == 1
     assert len(outputs.intermediates) == 1
 
 
@@ -140,14 +140,14 @@ def test_stopper_checks_only_every_check_every_steps(solver_type):
     solver(torch.ones(2, 3), operator=MatrixMult(torch.eye(3)), lam=0.0, gamma=3.0, t=100)
     assert stopper.converged
     assert stopper.stop_iter == 4
-    assert stopper.n_steps == 5
+    assert stopper.num_steps == 5
 
     stopper = SolutionChangeStopper(tol=1e-9, check_every=5)
     solver = solver_type(callbacks=[stopper])
     solver(torch.ones(2, 3), operator=MatrixMult(torch.eye(3)), lam=0.0, gamma=3.0, t=3)
     assert not stopper.converged
     assert stopper.last_change is None
-    assert stopper.n_steps == 3
+    assert stopper.num_steps == 3
 
 
 def test_relative_stopping_requires_every_sample_to_converge():
@@ -168,7 +168,7 @@ def test_relative_stopping_requires_every_sample_to_converge():
     stopper.on_step_end(solver, after.clone())
     assert solver.stop
     assert stopper.converged
-    assert stopper.n_steps == 2
+    assert stopper.num_steps == 2
 
 
 def test_absolute_stopping_and_zero_solution_are_finite():

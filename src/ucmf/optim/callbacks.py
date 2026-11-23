@@ -90,7 +90,7 @@ class SolutionChangeStopper(IterationCallback):
     ``||x_k - x_previous|| / max(||x_k||, ||x_previous||, eps) < tol``.
     Set ``relative=False`` to use absolute changes. All samples in a batch
     must satisfy the criterion. State resets at iteration zero of each solve.
-    ``stop_iter`` is zero-based; ``n_steps`` counts completed steps.
+    ``stop_iter`` is zero-based; ``num_steps`` counts completed steps.
 
     The criterion is evaluated only for every ``check_every``-th step (after
     ``check_every``, ``2 * check_every``, ... completed steps), comparing that
@@ -112,7 +112,7 @@ class SolutionChangeStopper(IterationCallback):
         self.last_change = None
         self.converged = False
         self.stop_iter = None
-        self.n_steps = 0
+        self.num_steps = 0
 
     @staticmethod
     def _batch_norm(x):
@@ -132,7 +132,7 @@ class SolutionChangeStopper(IterationCallback):
 
     def on_step_end(self, solver, x, **kwargs):
         """On checked steps, request stopping when all iterate changes are below tolerance."""
-        self.n_steps = solver.iter + 1
+        self.num_steps = solver.iter + 1
         if not self._is_check_step(solver):
             return
 

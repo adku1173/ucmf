@@ -93,10 +93,12 @@ def make_step(model_type, c, propagation, steps, weight_mode, gamma):
         kwargs = {'gamma': gamma, 'lam': theta / gamma}
     else:
         kwargs = {'weight_mode': weight_mode} if model_type in DENSE_WEIGHTS else {}
-        size = {'n_mics': c, 'r_diag': propagation.r_diag} if model_type in REDUCED else {
-            'n_measurements': propagation.shape[0],
+        size = {'num_mics': c, 'r_diag': propagation.r_diag} if model_type in REDUCED else {
+            'num_measurements': propagation.shape[0],
         }
-        model = model_type(steps, gamma_init=gamma, theta_init=theta, positive=False, **size, **kwargs).cuda()
+        model = model_type(
+            num_iterations=steps, gamma_init=gamma, theta_init=theta, positive=False, **size, **kwargs
+        ).cuda()
         kwargs = {}
         rng = torch.Generator(device='cuda').manual_seed(8)
         with torch.no_grad():

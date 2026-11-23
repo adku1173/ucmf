@@ -73,9 +73,9 @@ For example, an already-prepared learned subclass can implement:
 def _step_params(self, k):
     return self.gammas[k], self.thetas[k]
 
-def _iterate(self, y, x0, n_sources, gamma, theta, t, *, gradient, callback_metadata):
+def _iterate(self, y, x0, num_sources, gamma, theta, t, *, gradient, callback_metadata):
     return self._iterate_accelerated(
-        y, x0, n_sources, t, self._step_params,
+        y, x0, num_sources, t, self._step_params,
         gradient=gradient, callback_metadata=callback_metadata,
     )
 ```

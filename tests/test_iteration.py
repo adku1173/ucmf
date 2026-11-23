@@ -99,10 +99,10 @@ def test_own_recurrent_loop_keeps_graphs_and_resets_local_hidden_state(solver_ty
             super().__init__(positive=False)
             self.gain = torch.nn.Parameter(torch.tensor(0.2, dtype=torch.float64))
 
-        def _iterate(self, y, x0, n_sources, gamma, theta, t, *, gradient, callback_metadata):
+        def _iterate(self, y, x0, num_sources, gamma, theta, t, *, gradient, callback_metadata):
             shrink_func = self.get_shrink_func()
-            x = self._init_solver_vector(y, x0, n_sources)
-            z = self._init_solver_vector(y, x0, n_sources) if solver_type is FISTA else x
+            x = self._init_solver_vector(y, x0, num_sources)
+            z = self._init_solver_vector(y, x0, num_sources) if solver_type is FISTA else x
             tk = 1.0
             hidden = y.new_zeros(y.shape[0], 1)
             cell = y.new_zeros(y.shape[0], 1)

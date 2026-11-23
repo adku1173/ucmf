@@ -10,8 +10,8 @@ import torch
 import torch.nn.functional as F
 from pytest_cases import parametrize_with_cases
 from unfolded_model_cases import (
-    N_MICS,
-    N_SOURCES,
+    NUM_MICS,
+    NUM_SOURCES,
     ProblemCases,
     T,
     UnfoldedModelCases,
@@ -151,17 +151,17 @@ def test_precomputed_weights_match_factored_weights(make_model, dense_weights, o
 
 @parametrize_with_cases(MODEL, cases=UnfoldedModelCases)
 def test_constructor_validation(make_model, dense_weights):
-    with pytest.raises(ValueError, match='n_iterations must be positive'):
-        make_model(N_MICS, False, n_iterations=0, gamma_init=0.1, theta_init=0.01)
-    with pytest.raises(ValueError, match='n_measurements must be positive|n_mics must exceed'):
-        make_model(0, False, n_iterations=2, gamma_init=0.1, theta_init=0.01)
+    with pytest.raises(ValueError, match='num_iterations must be positive'):
+        make_model(NUM_MICS, False, num_iterations=0, gamma_init=0.1, theta_init=0.01)
+    with pytest.raises(ValueError, match='num_measurements must be positive|num_mics must exceed'):
+        make_model(0, False, num_iterations=2, gamma_init=0.1, theta_init=0.01)
 
 
-@pytest.mark.parametrize(('t', 'message'), [(-1, 'non-negative'), (T + 1, 'cannot exceed n_iterations')])
+@pytest.mark.parametrize(('t', 'message'), [(-1, 'non-negative'), (T + 1, 'cannot exceed num_iterations')])
 @parametrize_with_cases(MODEL, cases=UnfoldedModelCases)
 def test_forward_rejects_invalid_depth(make_model, dense_weights, t, message):
     model = build_model(make_model)
-    operator = CMFPropagation(torch.ones(N_MICS, N_SOURCES, dtype=torch.complex128))
+    operator = CMFPropagation(torch.ones(NUM_MICS, NUM_SOURCES, dtype=torch.complex128))
     with pytest.raises(ValueError, match=message):
         model(torch.ones(1, operator.shape[0], dtype=torch.float64), operator=operator, t=t)
 
@@ -169,7 +169,7 @@ def test_forward_rejects_invalid_depth(make_model, dense_weights, t, message):
 @parametrize_with_cases(MODEL, cases=UnfoldedModelCases)
 def test_forward_rejects_operator_of_another_array_size(make_model, dense_weights):
     model = build_model(make_model)
-    operator = CMFPropagation(torch.ones(N_MICS + 1, N_SOURCES, dtype=torch.complex128))
+    operator = CMFPropagation(torch.ones(NUM_MICS + 1, NUM_SOURCES, dtype=torch.complex128))
     with pytest.raises(ValueError, match='but Br? expects'):
         model(torch.ones(1, operator.shape[0], dtype=torch.float64), operator=operator)
 
@@ -195,7 +195,7 @@ def test_row_subset_validation(make_model, dense_weights, idx, batch, message):
 @parametrize_with_cases(MODEL, cases=UnfoldedModelCases, has_tag='cmf_only')
 def test_rejects_operator_without_cmf_coordinates(make_model, dense_weights):
     model = build_model(make_model)
-    m = N_MICS * N_MICS
+    m = NUM_MICS * NUM_MICS
     with pytest.raises(ValueError, match='CMFDictionary or CMFPropagation'):
         model(torch.ones(1, m, dtype=torch.float64), operator=MatrixMult(torch.eye(m, dtype=torch.float64)))
 
@@ -203,6 +203,6 @@ def test_rejects_operator_without_cmf_coordinates(make_model, dense_weights):
 @parametrize_with_cases(MODEL, cases=UnfoldedModelCases, has_tag='cmf_only')
 def test_rejects_mismatched_diagonal_setting(make_model, dense_weights):
     model = build_model(make_model, r_diag=False)
-    operator = CMFPropagation(torch.ones(N_MICS, N_SOURCES, dtype=torch.complex128), r_diag=True)
+    operator = CMFPropagation(torch.ones(NUM_MICS, NUM_SOURCES, dtype=torch.complex128), r_diag=True)
     with pytest.raises(ValueError, match='r_diag'):
         model(torch.ones(1, operator.shape[0], dtype=torch.float64), operator=operator)

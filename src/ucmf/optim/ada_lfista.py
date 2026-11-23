@@ -25,21 +25,21 @@ class _TwoWeights(FISTA):
     """Update direction ``(M.T @ y - R.T @ (R @ z)) / m`` with ``R = B1 @ A``, ``M = B2 @ A``."""
 
     def __init__(
-        self, *, n_measurements, positive=True, callbacks=None, B1=None, B2=None, weight_mode='factored',
+        self, *, num_measurements, positive=True, callbacks=None, B1=None, B2=None, weight_mode='factored',
     ):
         super().__init__(positive=positive, callbacks=callbacks)
         if weight_mode not in ('factored', 'precomputed'):
             raise ValueError("weight_mode must be 'factored' or 'precomputed'.")
         self.weight_mode = weight_mode
-        self.n_measurements = int(n_measurements)
-        if self.n_measurements <= 0:
-            raise ValueError(f'n_measurements must be positive, got {n_measurements}')
+        self.num_measurements = int(num_measurements)
+        if self.num_measurements <= 0:
+            raise ValueError(f'num_measurements must be positive, got {num_measurements}')
         self.B1 = nn.Parameter(self._initial_weight(B1, 'B1'))
         self.B2 = nn.Parameter(self._initial_weight(B2, 'B2'))
 
     def _initial_weight(self, B, name):
-        B_tensor = torch.eye(self.n_measurements) if B is None else B.detach().clone()
-        expected_shape = (self.n_measurements, self.n_measurements)
+        B_tensor = torch.eye(self.num_measurements) if B is None else B.detach().clone()
+        expected_shape = (self.num_measurements, self.num_measurements)
         if B_tensor.ndim != 2 or tuple(B_tensor.shape) != expected_shape:
             raise ValueError(f'{name} must have shape {expected_shape}, got {tuple(B_tensor.shape)}.')
         return B_tensor
@@ -67,8 +67,8 @@ class AdaLFISTA(LearnedParams, _TwoWeights):
     All arguments are keyword-only.
 
     Args:
-        n_iterations (int): number of unfolded iterations/layers.
-        n_measurements (int): full measurement dimension ``m`` spanned by ``B1``/``B2``.
+        num_iterations (int): number of unfolded iterations/layers.
+        num_measurements (int): full measurement dimension ``m`` spanned by ``B1``/``B2``.
         gamma_init (float): initial applied step size for every iteration.
         theta_init (float): initial applied soft-threshold for every iteration.
         positive (bool): enforce non-negativity via positive shrinkage.

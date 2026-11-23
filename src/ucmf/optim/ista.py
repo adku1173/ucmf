@@ -166,14 +166,14 @@ class ISTA(nn.Module):
             cb.on_step_end(self, x, gamma=gamma, theta=theta, **callback_metadata)
         return not self.stop
 
-    def _init_solver_vector(self, y, x0, n_sources):
+    def _init_solver_vector(self, y, x0, num_sources):
         """Initialize one solution-shaped vector."""
-        return y.new_zeros((y.shape[0], n_sources)) if x0 is None else x0.clone()
+        return y.new_zeros((y.shape[0], num_sources)) if x0 is None else x0.clone()
 
-    def _iterate(self, y, x0, n_sources, gamma, theta, t, *, gradient, callback_metadata):
+    def _iterate(self, y, x0, num_sources, gamma, theta, t, *, gradient, callback_metadata):
         """Run fixed-step ISTA with the solution local to this solve."""
         shrink_func = self.get_shrink_func()
-        x = self._init_solver_vector(y, x0, n_sources)
+        x = self._init_solver_vector(y, x0, num_sources)
 
         self._start_iterations(y)
         for k in range(t):
@@ -236,11 +236,11 @@ class FISTA(ISTA):
         z_next = x_next + (tk - 1.0) / t_next * (x_next - x)
         return t_next, z_next
 
-    def _iterate_accelerated(self, y, x0, n_sources, t, step_params_fn, *, gradient, callback_metadata):
+    def _iterate_accelerated(self, y, x0, num_sources, t, step_params_fn, *, gradient, callback_metadata):
         """Run FISTA with local momentum and caller-provided step parameters."""
         shrink_func = self.get_shrink_func()
-        x = self._init_solver_vector(y, x0, n_sources)
-        z = self._init_solver_vector(y, x0, n_sources)
+        x = self._init_solver_vector(y, x0, num_sources)
+        z = self._init_solver_vector(y, x0, num_sources)
         tk = 1.0
 
         self._start_iterations(y)
@@ -255,10 +255,10 @@ class FISTA(ISTA):
                 break
         return x
 
-    def _iterate(self, y, x0, n_sources, gamma, theta, t, *, gradient, callback_metadata):
+    def _iterate(self, y, x0, num_sources, gamma, theta, t, *, gradient, callback_metadata):
         """Run FISTA iterations with Nesterov momentum and return the solution."""
         return self._iterate_accelerated(
-            y, x0, n_sources, t,
+            y, x0, num_sources, t,
             step_params_fn=lambda _k: (gamma, theta),
             gradient=gradient,
             callback_metadata=callback_metadata,

@@ -154,7 +154,7 @@ bf = ac.BeamformerCMF(freq_data=ps, steer=st, problem=problem)
   results are directly comparable to `LassoLarsSolver(backend_kwargs={'fit_intercept': False})`.
   Scaling is done by the problem, not the solver.
 - An optional `start_value` is used as warm start `x0`. With `tol` set,
-  `SolverOutput.info` reports `n_steps` and `converged`; otherwise it is empty.
+  `SolverOutput.info` reports `num_steps` and `converged`; otherwise it is empty.
 
 ### Example: three sources
 

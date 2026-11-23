@@ -17,9 +17,9 @@ def _active_weight(operator, B):
     """Restrict ``B`` to the original rows represented by the operator."""
     validate_tensor(B, name='B', dtype=operator.dtype, device=operator.device)
     m, _ = operator.shape
-    num_msms_total = m if operator.rows is None else operator._num_msms_total
-    if num_msms_total is not None and num_msms_total != B.shape[0]:
-        raise ValueError(f'operator has {num_msms_total} measurements in total but B expects {B.shape[0]}.')
+    num_measurements_total = m if operator.rows is None else operator._num_measurements_total
+    if num_measurements_total is not None and num_measurements_total != B.shape[0]:
+        raise ValueError(f'operator has {num_measurements_total} measurements in total but B expects {B.shape[0]}.')
     if operator.rows is None:
         return B
     rows = _validate_index(operator.rows, 'operator.rows', operator.device, operator.batch_size)
@@ -40,14 +40,14 @@ def make_weight_operator(operator, B, weight_mode='factored'):
     return _AuxiliaryOperator(operator, MatrixMult(_active_weight(operator, B)))
 
 
-def validate_cmf_operator(operator, n_mics, r_diag):
+def validate_cmf_operator(operator, num_mics, r_diag):
     """Require compatible CMF coordinates for a reduced auxiliary weight."""
     if not isinstance(operator, (CMFDictionary, CMFPropagation)):
         raise ValueError('operator must be a CMFDictionary or CMFPropagation.')
     if operator.r_diag != r_diag:
         raise ValueError('operator.r_diag must match model.r_diag.')
-    if operator._num_mics_total != n_mics:
-        raise ValueError(f'operator has {operator._num_mics_total} microphones in total but Br expects {n_mics}.')
+    if operator._num_mics_total != num_mics:
+        raise ValueError(f'operator has {operator._num_mics_total} microphones in total but Br expects {num_mics}.')
 
 
 def make_propagation_weight_operator(operator, Br_re, Br_im):

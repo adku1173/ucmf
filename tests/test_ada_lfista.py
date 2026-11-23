@@ -10,10 +10,10 @@ import torch
 M_FULL, N, T = 6, 4, 4
 
 
-def make_model(*, n_measurements=M_FULL, weight_mode='factored'):
+def make_model(*, num_measurements=M_FULL, weight_mode='factored'):
     torch.manual_seed(0)
     model = AdaLFISTA(
-        n_iterations=T, n_measurements=n_measurements, gamma_init=0.3, theta_init=0.01,
+        num_iterations=T, num_measurements=num_measurements, gamma_init=0.3, theta_init=0.01,
         positive=False, weight_mode=weight_mode,
     )
     model = model.double()
@@ -52,7 +52,7 @@ def test_paper_numbering_b1_recurrence_b2_measurement(weight_mode):
 
 def test_precomputed_rejects_matrix_free_operator():
     operator = CMFPropagation(torch.ones(2, N, dtype=torch.complex128), r_diag=True)
-    model = make_model(n_measurements=operator.shape[0], weight_mode='precomputed')
+    model = make_model(num_measurements=operator.shape[0], weight_mode='precomputed')
     with pytest.raises(ValueError, match="'precomputed' requires a dense"):
         model(torch.ones(operator.shape[0], dtype=operator.dtype), operator=operator)
 
@@ -70,6 +70,6 @@ def test_rejects_unknown_weight_mode():
     ],
 )
 def test_rejects_auxiliary_weights_of_wrong_shape(kwargs, message):
-    arguments = {'n_iterations': T, 'n_measurements': M_FULL, 'gamma_init': 0.1, 'theta_init': 0.01, **kwargs}
+    arguments = {'num_iterations': T, 'num_measurements': M_FULL, 'gamma_init': 0.1, 'theta_init': 0.01, **kwargs}
     with pytest.raises(ValueError, match=message):
         AdaLFISTA(**arguments)

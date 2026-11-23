@@ -76,7 +76,7 @@ class TorchSolver(LeastSquaresSolver):
     def solve(self, problem, dictionary_matrix, data, start_value=None):
         """Solve one frequency bin.
 
-        With :attr:`tol` set, ``info`` reports ``n_steps`` and ``converged``;
+        With :attr:`tol` set, ``info`` reports ``num_steps`` and ``converged``;
         otherwise it is empty.
         """
         dtype = getattr(torch, self.precision)
@@ -87,7 +87,7 @@ class TorchSolver(LeastSquaresSolver):
         solver = self._create_solver(positive=problem.nonnegative, callbacks=[] if stopper is None else [stopper])
         with torch.no_grad():
             x = solver(y, x0=x0, t=self.n_iter, operator=operator, lam=problem.alpha * problem.unit_mult)
-        info = {} if stopper is None else {'n_steps': stopper.n_steps, 'converged': stopper.converged}
+        info = {} if stopper is None else {'num_steps': stopper.num_steps, 'converged': stopper.converged}
         return SolverOutput(solution=x[0].cpu().numpy(), info=info)
 
 

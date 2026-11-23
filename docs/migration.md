@@ -117,7 +117,7 @@ forward instead of a wrapper ([0004](adr/0004-single-weight-ada-lfista.md)):
   `lam` and `gamma` are not forward inputs.
 - Replace `A=` with `operator=`. For subsets, use `select_rows` on `MatrixMult`
   or `select_mics` on a CMF operator instead of passing `msm_subset`.
-  Align `y` with `operator.rows`; `n_measurements` stays the full size.
+  Align `y` with `operator.rows`; `num_measurements` stays the full size.
 - Callback `A` and `W` are operators. `W` represents `B_active @ A` without
   building the product; use `W.adjoint(r)` instead of multiplying a matrix.
 - The wrapper's `A_init` argument is dropped (B always starts as identity).
@@ -142,7 +142,7 @@ and `ucmf.optim`.
 - Pass a `CMFDictionary` or `CMFPropagation` as `operator=`. For microphone
   subsets, call `operator.select_mics(...)` and align `y` with the resulting
   `operator.rows`. The model restricts its weights using `operator.mics`; the
-  constructor's `n_mics` remains the full array size.
+  constructor's `num_mics` remains the full array size.
 - Match `r_diag` between the model and operator. With `r_diag=True`, the
   missing CSM diagonal is filled with zeros before applying the auxiliary
   weight and omitted again afterwards. The model does not restore the

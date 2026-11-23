@@ -53,7 +53,7 @@ class LinearOperator:
     ``device`` and implement ``forward`` / ``adjoint``.
     """
 
-    _num_msms_total = None
+    _num_measurements_total = None
 
     def forward(self, x):
         """``A x`` for ``x`` of shape ``(B, n)``; returns ``(B, m)``."""
@@ -87,7 +87,7 @@ class MatrixMult(LinearOperator):
         self.matrix = matrix
         self.rows = rows
         self.shape = tuple(matrix.shape[-2:])
-        self._num_msms_total = self.shape[0] if rows is None else None
+        self._num_measurements_total = self.shape[0] if rows is None else None
         self.batch_size = matrix.shape[0] if matrix.ndim == 3 else None
         self.dtype = matrix.dtype
         self.device = matrix.device
@@ -100,7 +100,7 @@ class MatrixMult(LinearOperator):
 
     def _with_matrix(self, matrix, rows):
         op = MatrixMult(matrix, rows=rows)
-        op._num_msms_total = self._num_msms_total
+        op._num_measurements_total = self._num_measurements_total
         return op
 
     def detached(self):
@@ -126,7 +126,7 @@ class _AuxiliaryOperator(LinearOperator):
     def __init__(self, operator, weight):
         self.operator, self.weight = operator, weight
         self.shape, self.rows = operator.shape, operator.rows
-        self._num_msms_total = operator._num_msms_total
+        self._num_measurements_total = operator._num_measurements_total
         self.dtype, self.device = operator.dtype, operator.device
         self.batch_size = weight.batch_size if weight.batch_size is not None else operator.batch_size
 
@@ -157,19 +157,19 @@ class HermitianVectorization(nn.Module):
     Index buffers move with ``.to(device)``; weights use the input dtype.
     """
 
-    def __init__(self, n_mics, r_diag=False):
+    def __init__(self, num_mics, r_diag=False):
         super().__init__()
-        self.n_mics = n_mics
+        self.num_mics = num_mics
         # Lower triangle of S.T at (row, col) holds S[col, row]: i = col, j = row.
-        rows, cols = torch.tril_indices(n_mics, n_mics)
+        rows, cols = torch.tril_indices(num_mics, num_mics)
         off_diagonal = rows != cols
         keep_real = off_diagonal if r_diag else torch.ones_like(off_diagonal)
         self.register_buffer('real_i', cols[keep_real], persistent=False)
         self.register_buffer('real_j', rows[keep_real], persistent=False)
         self.register_buffer('imag_i', cols[off_diagonal], persistent=False)
         self.register_buffer('imag_j', rows[off_diagonal], persistent=False)
-        self.n_real = int(keep_real.sum())
-        self.n_measurements = self.n_real + int(off_diagonal.sum())
+        self.num_real = int(keep_real.sum())
+        self.num_measurements = self.num_real + int(off_diagonal.sum())
 
     def _real_weights(self, reference):
         """Weights of the real entries: 1 on the diagonal, sqrt(2) off it, in reference's dtype."""
@@ -178,7 +178,7 @@ class HermitianVectorization(nn.Module):
 
     def row_weights(self, reference):
         """Weights relating an unweighted (current Acoular) vector to ``hvec``: ``hvec = w * vec``."""
-        imag = reference.new_full((self.n_measurements - self.n_real,), math.sqrt(2.0))
+        imag = reference.new_full((self.num_measurements - self.num_real,), math.sqrt(2.0))
         return torch.cat((self._real_weights(reference), imag))
 
     def forward(self, real, imag):
@@ -197,13 +197,13 @@ class HermitianVectorization(nn.Module):
         Off-diagonal entries ``v / sqrt(2)`` are placed at ``(i, j)`` and mirrored to
         ``(j, i)`` (imaginary part with flipped sign); diagonal entries are ``v``.
         """
-        shape = (*vector.shape[:-1], self.n_mics, self.n_mics)
+        shape = (*vector.shape[:-1], self.num_mics, self.num_mics)
         real = vector.new_zeros(shape)
         imag = vector.new_zeros(shape)
         # Symmetrization below adds the diagonal twice, hence the extra factor 2 there.
         scale = self._real_weights(vector) * (1 + (self.real_i == self.real_j).to(vector))
-        real[..., self.real_i, self.real_j] = vector[..., : self.n_real] / scale
-        imag[..., self.imag_i, self.imag_j] = vector[..., self.n_real :] / math.sqrt(2.0)
+        real[..., self.real_i, self.real_j] = vector[..., : self.num_real] / scale
+        imag[..., self.imag_i, self.imag_j] = vector[..., self.num_real :] / math.sqrt(2.0)
         return real + real.mT, imag - imag.mT
 
 
@@ -218,7 +218,7 @@ class _AuxiliaryPropagationOperator(LinearOperator):
 
     def __init__(self, Br, hvec):
         self.Br, self.hvec = Br, hvec
-        m = hvec.n_measurements
+        m = hvec.num_measurements
         self.shape = (m, m)
         self.dtype, self.device = Br.real.dtype, Br.device
         self.batch_size = Br.shape[0] if Br.ndim == 3 else None
@@ -254,8 +254,8 @@ class CMFPropagation(LinearOperator):
             raise ValueError('H must define nonempty measurement and source dimensions.')
         self.H, self.r_diag = H, r_diag
         self.hvec = HermitianVectorization(c, r_diag=r_diag).to(H.device)
-        self.shape = (self.hvec.n_measurements, n)
-        self._num_msms_total, self._num_mics_total = self.shape[0], c
+        self.shape = (self.hvec.num_measurements, n)
+        self._num_measurements_total, self._num_mics_total = self.shape[0], c
         self.dtype, self.device = H.real.dtype, H.device
         self.batch_size = H.shape[0] if H.ndim == 3 else None
         self.rows = self.mics = None
@@ -279,7 +279,7 @@ class CMFPropagation(LinearOperator):
 
     def _with_propagation(self, H):
         op = CMFPropagation(H, r_diag=self.r_diag)
-        op._num_msms_total, op._num_mics_total = self._num_msms_total, self._num_mics_total
+        op._num_measurements_total, op._num_mics_total = self._num_measurements_total, self._num_mics_total
         op.rows, op.mics = self.rows, self.mics
         return op
 
@@ -297,7 +297,7 @@ class CMFPropagation(LinearOperator):
         # Offset of row j in the packed lower triangle of CSM.T, plus column i.
         real_rows = j * (j + (-1 if self.r_diag else 1)) // 2 + i
         i, j = index[..., op.hvec.imag_i], index[..., op.hvec.imag_j]
-        imag_rows = self.hvec.n_real + j * (j - 1) // 2 + i
+        imag_rows = self.hvec.num_real + j * (j - 1) // 2 + i
         op.rows = self._subset_rows(torch.cat((real_rows, imag_rows), dim=-1))
         return op
 
@@ -332,7 +332,8 @@ class CMFDictionary(MatrixMult):
             entries = torch.cat((real, imag), dim=-2)
             matrix = entries * hvec.row_weights(entries).unsqueeze(-1)
         super().__init__(matrix, rows=propagation.rows)
-        self._num_msms_total, self._num_mics_total = propagation._num_msms_total, propagation._num_mics_total
+        self._num_measurements_total = propagation._num_measurements_total
+        self._num_mics_total = propagation._num_mics_total
 
     def _derived(self, propagation, matrix=None):
         # Skip __init__: the propagation operator already carries the selected rows and microphones.
