@@ -1,44 +1,64 @@
-"""Per-solve gradient weight matrix helpers for unfolded sparse solvers."""
+"""Per-solve gradient weight helpers for unfolded sparse solvers."""
 
-from __future__ import annotations
-
+from .operator import (
+    CMFDictionary,
+    CMFPropagation,
+    MatrixMult,
+    _AuxiliaryOperator,
+    _AuxiliaryPropagationOperator,
+    _validate_index,
+)
 from .utils import validate_tensor
 
 import torch
 
 
-def validate_gradient_weight_shape(W: torch.Tensor, A_tensor: torch.Tensor, y: torch.Tensor):
-    """Validate a per-solve effective gradient weight matrix ``W``."""
-    if W.ndim not in (2, 3):
-        msg = f'W must be 2D or 3D, got shape {tuple(W.shape)}'
-        raise ValueError(msg)
-    if tuple(W.shape[-2:]) != tuple(A_tensor.shape[-2:]):
-        msg = f'W has operator shape {tuple(W.shape[-2:])} but A has operator shape {tuple(A_tensor.shape[-2:])}.'
-        raise ValueError(msg)
-    if W.ndim == 3 and W.shape[0] != y.shape[0]:
-        msg = f'Batched W has batch size {W.shape[0]} but y has batch size {y.shape[0]}.'
-        raise ValueError(msg)
+def _active_weight(operator, B):
+    """Restrict ``B`` to the original rows represented by the operator."""
+    validate_tensor(B, name='B', dtype=operator.dtype, device=operator.device)
+    m, _ = operator.shape
+    num_msms_total = m if operator.rows is None else operator._num_msms_total
+    if num_msms_total is not None and num_msms_total != B.shape[0]:
+        raise ValueError(f'operator has {num_msms_total} measurements in total but B expects {B.shape[0]}.')
+    if operator.rows is None:
+        return B
+    rows = _validate_index(operator.rows, 'operator.rows', operator.device, operator.batch_size)
+    if rows.shape[-1] != m:
+        raise ValueError(f'operator.rows length must match the measurement dimension {m}.')
+    if rows.ndim == 2 and operator.batch_size is None:
+        raise ValueError('Per-problem operator.rows requires a batched operator.')
+    return B[rows.unsqueeze(-1), rows.unsqueeze(-2)]
 
 
-def prepare_gradient_weight(W, A_tensor: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-    """Return the effective adjoint-side operator for one solve.
+def make_weight_operator(operator, B, weight_mode='factored'):
+    """Build ``B_active @ A`` as a composition or precompute its dense product."""
+    if weight_mode == 'precomputed':
+        if not isinstance(operator, MatrixMult):
+            raise ValueError("weight_mode='precomputed' requires a dense MatrixMult or CMFDictionary operator.")
+        matrix = apply_auxiliary_weight(_active_weight(operator, B), operator.matrix)
+        return operator._with_matrix(matrix, rows=operator.rows)
+    return _AuxiliaryOperator(operator, MatrixMult(_active_weight(operator, B)))
 
-    The normalized data term ``1 / (2 m) * ||y - A x||_2^2`` has gradient
-    ``-A.T @ (y - A x) / m``, so the descent step applies the adjoint ``A.T``.
-    A model may replace that adjoint by a learned operator ``W.T``, giving the
-    weighted direction ``W.T @ (y - A x) / m`` while the forward operator stays
-    ``A``. This helper returns that effective adjoint-side operator ``W``.
 
-    ``A_tensor`` (i.e. ``W = A``, the classical adjoint) is returned when ``W``
-    is omitted. Otherwise ``W`` must already be a real floating tensor with the
-    same device/dtype and operator shape as ``A_tensor``. It is returned
-    unchanged so its autograd graph is preserved.
-    """
-    if W is None:
-        return A_tensor
-    validate_tensor(W, name='W', dtype=A_tensor.dtype, device=A_tensor.device)
-    validate_gradient_weight_shape(W, A_tensor, y)
-    return W
+def validate_cmf_operator(operator, n_mics, r_diag):
+    """Require compatible CMF coordinates for a reduced auxiliary weight."""
+    if not isinstance(operator, (CMFDictionary, CMFPropagation)):
+        raise ValueError('operator must be a CMFDictionary or CMFPropagation.')
+    if operator.r_diag != r_diag:
+        raise ValueError('operator.r_diag must match model.r_diag.')
+    if operator._num_mics_total != n_mics:
+        raise ValueError(f'operator has {operator._num_mics_total} microphones in total but Br expects {n_mics}.')
+
+
+def make_propagation_weight_operator(operator, Br_re, Br_im):
+    """Compose the fixed CMF operator with a learned weight on its active microphones."""
+    validate_tensor(Br_re, name='Br_re', dtype=operator.dtype, device=operator.device)
+    validate_tensor(Br_im, name='Br_im', dtype=operator.dtype, device=operator.device)
+    Br = torch.complex(Br_re, Br_im)
+    mics = operator.mics
+    if mics is not None:
+        Br = Br[mics.unsqueeze(-1), mics.unsqueeze(-2)]
+    return _AuxiliaryOperator(operator, _AuxiliaryPropagationOperator(Br, operator.hvec))
 
 
 def apply_auxiliary_weight(B, A_tensor):
@@ -54,50 +74,3 @@ def apply_auxiliary_weight(B, A_tensor):
         return B @ A_tensor
     # Shared B, batched A: broadcast B over the batch, (p, m) @ (b, m, n) -> (b, p, n).
     return torch.bmm(B.unsqueeze(0).expand(A_tensor.shape[0], -1, -1), A_tensor)
-
-
-def validate_measurement_subset(msm_subset, A_tensor, device):
-    """Validate and return long measurement indices ``I`` into the full auxiliary weight.
-
-    ``I`` names the original rows of the already-subsetted ``A``; it must be an
-    integer tensor on ``device`` (the auxiliary weight's device).
-
-    Only metadata (dtype, device, shape) is checked. Precondition: every entry
-    lies in ``[0, m)`` for the full measurement count ``m``. This must be
-    guaranteed by the index generator (e.g. a CV split). A value check here
-    would read the indices on the host and force a GPU sync on every forward.
-    Violations are not caught: negative entries wrap around silently in the
-    per-sample path; too large entries raise in indexing (device assert on CUDA).
-    """
-    if not torch.is_tensor(msm_subset) or msm_subset.dtype not in (torch.int32, torch.int64):
-        raise ValueError('msm_subset must be an integer tensor of measurement indices.')
-    if msm_subset.device != device:
-        raise ValueError(f'msm_subset must be on device {device}, got {msm_subset.device}.')
-    idx = msm_subset
-    if idx.ndim not in (1, 2):
-        raise ValueError(f'msm_subset must be 1D or 2D, got shape {tuple(idx.shape)}.')
-    if idx.shape[-1] != A_tensor.shape[-2]:
-        raise ValueError(f'msm_subset length {idx.shape[-1]} must match A measurement dim {A_tensor.shape[-2]}.')
-    if idx.ndim == 2:
-        if A_tensor.ndim != 3:
-            raise ValueError('per-sample msm_subset (2D) requires batched A of shape (B, m_sub, n).')
-        if idx.shape[0] != A_tensor.shape[0]:
-            raise ValueError(f'msm_subset batch {idx.shape[0]} does not match A batch {A_tensor.shape[0]}.')
-    return idx.long()
-
-
-def measurement_subset_weight(B, A_tensor, msm_subset):
-    """Effective weight on a reduced measurement set ``I``: ``W_sub = B[I, I] @ A_sub``.
-
-    ``A_tensor`` holds the active rows ``A_sub``; ``msm_subset`` gives the original
-    indices ``I`` so the matching sub-block of ``B`` is selected.
-    """
-    idx = validate_measurement_subset(msm_subset, A_tensor, B.device)
-    if idx.ndim == 1:
-        # Shared index set: B_sub = B[I][:, I], (m_sub, m_sub).
-        B_sub = B.index_select(0, idx).index_select(1, idx)
-    else:
-        # Per-sample index sets: B_sub[b] = B[I_b][:, I_b], (b, m_sub, m_sub),
-        # via broadcast advanced indexing B[I_b[:, None], I_b[None, :]].
-        B_sub = B[idx[:, :, None], idx[:, None, :]]
-    return apply_auxiliary_weight(B_sub, A_tensor)

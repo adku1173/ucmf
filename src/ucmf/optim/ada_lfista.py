@@ -14,13 +14,8 @@ unconstrained ``_gamma`` / ``_theta``; ``lam`` and ``gamma`` are no inputs.
 """
 
 from .ista import FISTA
-from .utils import (
-    apply_adjoint_operator,
-    apply_forward_operator,
-    softplus_inverse,
-    validate_unfolded_iterations,
-)
-from .weights import apply_auxiliary_weight, measurement_subset_weight, prepare_gradient_weight
+from .utils import softplus_inverse, validate_unfolded_iterations
+from .weights import make_weight_operator
 
 import torch
 import torch.nn.functional as F
@@ -37,8 +32,11 @@ class AdaLFISTA(FISTA):
         theta_init (float): initial applied soft-threshold for every iteration.
         positive (bool): enforce non-negativity via positive shrinkage.
         callbacks (list | None): optional solver callbacks. End callbacks get the
-            physical ``A``, ``W = M`` and ``W_recurrent = R``.
+            operators ``A``, ``W = M`` and ``W_recurrent = R``.
         B1, B2 (Tensor | None): optional ``(m, m)`` inits; default identity.
+        weight_mode (str): ``'factored'`` leaves ``R`` as a composition.
+            ``'precomputed'`` forms ``R`` once per solve and requires a dense
+            measurement operator. ``M`` stays factored in either mode.
     """
 
     def __init__(
@@ -51,8 +49,13 @@ class AdaLFISTA(FISTA):
         callbacks=None,
         B1=None,
         B2=None,
+        *,
+        weight_mode='factored',
     ):
         super().__init__(positive=positive, callbacks=callbacks)
+        if weight_mode not in ('factored', 'precomputed'):
+            raise ValueError("weight_mode must be 'factored' or 'precomputed'.")
+        self.weight_mode = weight_mode
         if n_iterations <= 0:
             raise ValueError(f'n_iterations must be positive, got {n_iterations}')
         self.n_iterations = n_iterations
@@ -81,49 +84,29 @@ class AdaLFISTA(FISTA):
         """Per-iteration soft-thresholds actually applied (``softplus(_theta)``)."""
         return F.softplus(self._theta)
 
-    def _effective_weight(self, B, A_tensor, msm_subset):
-        """``B @ A`` on the full set, ``B[I, I] @ A_sub`` on a reduced set ``I``."""
-        if msm_subset is None:
-            if A_tensor.shape[-2] != self.n_measurements:
-                raise ValueError(f'A has {A_tensor.shape[-2]} measurements but B expects {self.n_measurements}.')
-            return apply_auxiliary_weight(B, A_tensor)
-        return measurement_subset_weight(B, A_tensor, msm_subset)
+    def forward(self, y, x0=None, t=1, operator=None):
+        """Run two-matrix Ada-LFISTA with a fixed operator and learned weights.
 
-    def ls_grad(self, y, x, A, Op=None):
-        """Two-matrix direction ``(M.T @ y - R.T @ (R @ x)) / m`` with ``Op = (M, M.T @ y, R)``."""
-        _, Mty, R = Op
-        feedback = apply_adjoint_operator(apply_forward_operator(R, x), R)
-        return (Mty - feedback) / float(y.shape[1])
-
-    def _on_iteration_end(self, x, gamma, theta, A_tensor, y, W_tensor=None):
-        """Report the physical ``A`` and both effective operators to end callbacks."""
-        M, _, R = W_tensor
-        for cb in self.callbacks:
-            cb.on_step_end(self, x, gamma=gamma, theta=theta, A=A_tensor, W=M, W_recurrent=R, y=y)
-        return not self.stop
-
-    def forward(self, y, x0=None, t=1, A=None, msm_subset=None):
-        """Run two-matrix Ada-LFISTA with learned ``gamma``/``theta``.
-
-        All tensor inputs and the model's parameters must already share ``y``'s
-        dtype and device. ``msm_subset`` (``(m_sub,)`` or per-sample
-        ``(B, m_sub)``) names the original rows of the already-subsetted
-        ``y``/``A`` and restricts each factor first: ``B1[I, I]``, ``B2[I, I]``.
+        Inputs and model parameters must already share ``y``'s dtype and device.
+        For a subset, ``y`` must follow ``operator.rows`` in the full measurement
+        coordinates of both weights. Row indices must be in range.
         """
         validate_unfolded_iterations(t, self.n_iterations)
-        y, x0, A_tensor, _ = self._prepare_forward_inputs(y, x0, A)
-        # R = B1 @ A (recurrence), M = B2 @ A (measurement branch); validated, autograd kept.
-        R = prepare_gradient_weight(self._effective_weight(self.B1, A_tensor, msm_subset), A_tensor, y)
-        M = prepare_gradient_weight(self._effective_weight(self.B2, A_tensor, msm_subset), A_tensor, y)
-        # M.T @ y does not depend on the iteration: computed once per solve, so each
-        # iteration needs only R @ z and R.T @ (.), as many products as Ada-LFISTA-SW.
-        Mty = apply_adjoint_operator(y, M)
+        y, x0, operator, _ = self._prepare_operator_inputs(y, x0, operator)
+        recurrent_operator = make_weight_operator(operator, self.B1, self.weight_mode)
+        weight_operator = make_weight_operator(operator, self.B2)
+        # M.T @ y does not depend on the iteration; no need to form M.
+        measurement_term = weight_operator.adjoint(y)
+        m = float(y.shape[1])
+
+        def gradient(x):
+            feedback = recurrent_operator.adjoint(recurrent_operator.forward(x))
+            return (measurement_term - feedback) / m
+
         gammas, thetas = self.gamma.unbind(), self.theta.unbind()
         return self._iterate_accelerated(
-            y,
-            x0,
-            A_tensor,
-            t,
+            y, x0, operator.shape[1], t,
             step_params_fn=lambda k: (gammas[k], thetas[k]),
-            Op_tensor=(M, Mty, R),
+            gradient=gradient,
+            callback_metadata={'A': operator, 'W': weight_operator, 'W_recurrent': recurrent_operator, 'y': y},
         )

@@ -25,4 +25,5 @@ physical `A`, `W = M` and `W_recurrent = R`.
   swapped: its `B1` / `measurement_weight` is `B2` here, its `B2` /
   `recurrence_weight` is `B1`.
 - Properties shared by all unfolded models are tested once, parametrized over
-  every model (`unfolded_model_type` fixture); model files test specifics only.
+  every model (`UnfoldedModelCases` in `tests/unfolded_model_cases.py`); model
+  files test specifics only.

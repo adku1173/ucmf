@@ -2,6 +2,7 @@
 
 from ucmf import FISTA, ISTA
 from ucmf.optim import IterationCallback
+from ucmf.optim.operator import MatrixMult
 
 import numpy as np
 import pytest
@@ -9,7 +10,7 @@ import torch
 
 
 @pytest.mark.parametrize('solver_type', [ISTA, FISTA])
-@pytest.mark.parametrize('name', ['A', 'x0', 'lam', 'gamma'])
+@pytest.mark.parametrize('name', ['operator', 'x0', 'lam', 'gamma'])
 @pytest.mark.parametrize('mismatch', ['dtype', 'device', 'integer', 'complex', 'array'])
 def test_forward_rejects_incompatible_inputs_before_callbacks(solver_type, name, mismatch):
     class MustNotRun(IterationCallback):
@@ -18,12 +19,12 @@ def test_forward_rejects_incompatible_inputs_before_callbacks(solver_type, name,
 
     inputs = {
         'y': torch.ones(2, 2),
-        'A': torch.eye(2),
+        'operator': MatrixMult(torch.eye(2)),
         'x0': torch.zeros(2, 2),
         'lam': torch.full((2,), 0.1),
         'gamma': torch.full((2,), 0.2),
     }
-    value = inputs[name]
+    value = inputs[name].matrix if name == 'operator' else inputs[name]
     saved = value.clone()
     if mismatch == 'dtype':
         inputs[name] = value.double()
@@ -41,6 +42,11 @@ def test_forward_rejects_incompatible_inputs_before_callbacks(solver_type, name,
         inputs[name] = value.numpy()
         message = f'{name} must be a real'
 
+    if name == 'operator':
+        if mismatch in ('dtype', 'device'):
+            inputs[name] = MatrixMult(inputs[name])
+        else:
+            message = 'operator must be a LinearOperator'
     with pytest.raises(ValueError, match=message):
         solver_type(callbacks=[MustNotRun()])(**inputs, t=1)
     torch.testing.assert_close(value, saved)
@@ -48,36 +54,19 @@ def test_forward_rejects_incompatible_inputs_before_callbacks(solver_type, name,
 
 
 @pytest.mark.parametrize('solver_type', [ISTA, FISTA])
-@pytest.mark.parametrize('name', ['A', 'x0', 'lam', 'gamma'])
+@pytest.mark.parametrize('name', ['operator', 'x0', 'lam', 'gamma'])
 def test_forward_requires_explicit_array_preprocessing(solver_type, name):
-    inputs = {'y': torch.ones(2, 2), 'A': torch.eye(2), 'lam': 0.1, 'gamma': 0.2}
-    array = np.ones((2, 2) if name in ('A', 'x0') else (2,))
-    inputs[name] = torch.as_tensor(array, dtype=inputs['y'].dtype, device=inputs['y'].device)
+    inputs = {'y': torch.ones(2, 2), 'operator': MatrixMult(torch.eye(2)), 'lam': 0.1, 'gamma': 0.2}
+    array = np.ones((2, 2) if name in ('operator', 'x0') else (2,))
+    prepared = torch.as_tensor(array, dtype=inputs['y'].dtype, device=inputs['y'].device)
+    inputs[name] = MatrixMult(prepared) if name == 'operator' else prepared
     assert solver_type()(**inputs, t=1).shape == (2, 2)
 
 
-@pytest.mark.parametrize('name', ['A', 'x0', 'lam', 'gamma'])
+@pytest.mark.parametrize('name', ['operator', 'x0', 'lam', 'gamma'])
 def test_mismatches_are_rejected_even_for_zero_iterations(name):
-    inputs = {'y': torch.ones(2, 2), 'A': torch.eye(2), 'lam': 0.1, 'gamma': 0.2}
-    inputs[name] = torch.ones((2, 2) if name in ('A', 'x0') else (2,), dtype=torch.float64)
+    inputs = {'y': torch.ones(2, 2), 'operator': MatrixMult(torch.eye(2)), 'lam': 0.1, 'gamma': 0.2}
+    value = torch.ones((2, 2) if name in ('operator', 'x0') else (2,), dtype=torch.float64)
+    inputs[name] = MatrixMult(value) if name == 'operator' else value
     with pytest.raises(ValueError, match=f'{name} must have dtype'):
         ISTA()(**inputs, t=0)
-
-
-@pytest.mark.parametrize('mismatch', ['dtype', 'device', 'integer', 'array'])
-def test_weighted_forward_rejects_incompatible_weights(weighted_solver_type, mismatch):
-    W = torch.eye(2)
-    if mismatch == 'dtype':
-        W = W.double()
-        message = 'W must have dtype'
-    elif mismatch == 'device':
-        W = W.to('meta')
-        message = 'W must be on device'
-    elif mismatch == 'integer':
-        W = W.long()
-        message = 'W must be a real floating-point tensor'
-    else:
-        W = W.numpy()
-        message = 'W must be a real floating-point tensor'
-    with pytest.raises(ValueError, match=message):
-        weighted_solver_type()(torch.ones(2), A=torch.eye(2), W=W, lam=0.1, t=0)

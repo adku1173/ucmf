@@ -33,8 +33,10 @@ def compile_unrolled(model, t_max, mode='reduce-overhead'):
     def all_intermediates(y, **forward_kwargs):
         previous_callbacks = model.callbacks
         model.callbacks = [*previous_callbacks, collector]
-        model(y, t=t_max, **forward_kwargs)
-        model.callbacks = previous_callbacks
+        try:
+            model(y, t=t_max, **forward_kwargs)
+        finally:
+            model.callbacks = previous_callbacks
         return torch.stack(collector.intermediates)
 
     return torch.compile(all_intermediates, mode=mode)

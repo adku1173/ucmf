@@ -17,7 +17,12 @@ dependencies = [
 
 [dependency-groups]
 examples = ["acoular", "matplotlib", "pylops", "threadpoolctl"]
-dev = ["pytest>=8", "ruff>=0.9", { include-group = "examples" }]
+dev = [
+    "pytest>=8,<9.1",  # pytest-cases 3.10.1 is incompatible with pytest 9.1.
+    "pytest-cases>=3.10.1",
+    "ruff>=0.9",
+    { include-group = "examples" },
+]
 
 [tool.uv.sources]
 acoular = { git = "https://github.com/acoular/acoular.git", branch = "cmf-problem-assembly" }

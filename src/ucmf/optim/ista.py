@@ -16,16 +16,12 @@ With support for:
 
 import math
 
+from .operator import LinearOperator
 from .utils import (
-    apply_adjoint_operator,
-    apply_forward_operator,
-    default_gamma_from_A,
-    prepare_sensing_matrix,
+    default_gamma_from_operator,
     resolve_batch_param,
-    validate_shapes,
     validate_tensor,
 )
-from .weights import prepare_gradient_weight
 
 import torch
 import torch.nn.functional as F
@@ -76,16 +72,14 @@ class ISTA(nn.Module):
         """
         return F.relu(x - thresh)
 
-    def ls_grad(self, y, x, A, Op=None):
-        """Compute gradient using least-squares mode."""
-        if Op is None:
-            Op = A
-        res = y - apply_forward_operator(A, x)
-        return apply_adjoint_operator(res, Op) / float(y.shape[1])
+    def _make_gradient(self, y, operator, weight_operator):
+        """Bind the data and operators for the negative LS direction at ``x``."""
+        m = float(y.shape[1])
 
-    def get_grad_func(self):
-        """Return the normalized LS gradient hook."""
-        return self.ls_grad
+        def gradient(x):
+            return weight_operator.adjoint(y - operator.forward(x)) / m
+
+        return gradient
 
     def get_shrink_func(self):
         """Get shrinkage function based on positivity."""
@@ -93,53 +87,59 @@ class ISTA(nn.Module):
             return self.shrink_positive
         return self.shrink
 
-    def step(self, y, x, A, shrink_func, grad_func, gamma, theta, Op=None):
-        """Perform a single ISTA step."""
-        grad = grad_func(y, x, A, Op=Op)
-        x = x + gamma * grad
-        return shrink_func(x, theta)
+    def step(self, x, gradient, shrink_func, gamma, theta):
+        """Perform a single proximal step using the prepared direction."""
+        return shrink_func(x + gamma * gradient(x), theta)
 
-    def _prepare_forward_inputs(self, y, x0, A):
-        """Validate prepared tensors and add batch axes without dtype/device conversion."""
+    def _prepare_vectors(self, y, x0):
+        """Validate measurements and warm start, adding batch axes if needed."""
         if not torch.is_tensor(y) or y.ndim not in (1, 2) or not torch.is_floating_point(y):
             msg = 'y must be a real floating-point tensor with shape (m,) or (B, m).'
             raise ValueError(msg)
         if y.ndim == 1:
             y = y.unsqueeze(0)
-        batch_size = y.shape[0]
-
-        A_tensor = prepare_sensing_matrix(A, dtype=y.dtype, device=y.device)
         if x0 is not None:
             validate_tensor(x0, name='x0', dtype=y.dtype, device=y.device)
             if x0.ndim == 1:
                 x0 = x0.unsqueeze(0)
+        return y, x0
 
-        validate_shapes(y, x0, A_tensor)
-        return y, x0, A_tensor, batch_size
+    def _prepare_operator_inputs(self, y, x0, operator):
+        """Check operator metadata against the prepared vectors and detach its data."""
+        y, x0 = self._prepare_vectors(y, x0)
+        if not isinstance(operator, LinearOperator):
+            raise ValueError('operator must be a LinearOperator; wrap dense matrices in MatrixMult.')
+        if operator.dtype != y.dtype:
+            raise ValueError(f'operator must have dtype {y.dtype}, got {operator.dtype}.')
+        if operator.device != y.device:
+            raise ValueError(f'operator must be on device {y.device}, got {operator.device}.')
+        m, n = operator.shape
+        if m <= 0 or n <= 0:
+            raise ValueError('operator must have non-empty measurement and source dimensions.')
+        batch_size = y.shape[0]
+        if y.shape[1] != m or operator.batch_size not in (None, batch_size):
+            msg = f'y has shape {tuple(y.shape)} but operator has shape {(m, n)} and batch size {operator.batch_size}.'
+            raise ValueError(msg)
+        if x0 is not None and x0.shape != (batch_size, n):
+            raise ValueError(f'x0 has shape {tuple(x0.shape)} but expected {(batch_size, n)}')
+        return y, x0, operator.detached(), batch_size
 
-    def _resolve_lam_value(self, lam, batch_size, A_tensor, missing_message='lam must be provided.'):
+    def _resolve_lam_value(self, lam, batch_size, operator, missing_message='lam must be provided.'):
         """Resolve regularization strength for scalar or per-batch input."""
         if torch.is_tensor(lam):
-            validate_tensor(lam, name='lam', dtype=A_tensor.dtype, device=A_tensor.device)
+            validate_tensor(lam, name='lam', dtype=operator.dtype, device=operator.device)
         lam_value = resolve_batch_param(lam, batch_size, name='lam')
         if lam_value is None:
             raise ValueError(missing_message)
         return lam_value
 
-    def _resolve_gamma_theta(
-        self,
-        lam_value,
-        gamma,
-        batch_size,
-        A_tensor,
-    ):
+    def _resolve_gamma_theta(self, lam_value, gamma, batch_size, operator):
         """Resolve step size and shrinkage threshold for fixed-step solvers."""
-        gamma_value = gamma
-        if gamma_value is None:
-            gamma_value = default_gamma_from_A(A_tensor)
-        if torch.is_tensor(gamma_value):
-            validate_tensor(gamma_value, name='gamma', dtype=A_tensor.dtype, device=A_tensor.device)
-        gamma_value = resolve_batch_param(gamma_value, batch_size, name='gamma')
+        if gamma is None:
+            gamma = default_gamma_from_operator(operator)
+        if torch.is_tensor(gamma):
+            validate_tensor(gamma, name='gamma', dtype=operator.dtype, device=operator.device)
+        gamma_value = resolve_batch_param(gamma, batch_size, name='gamma')
 
         # Normalized LASSO convention:
         #   1 / (2 m) * ||y - A x||_2^2 + lam * ||x||_1
@@ -147,23 +147,6 @@ class ISTA(nn.Module):
         # so the proximal threshold is gamma * lam.
         theta_value = lam_value * gamma_value
         return gamma_value, theta_value
-
-    def _setup_forward(self, y, x0, A, lam, gamma, W=None):
-        """Protected preparation for classical and subclass-owned weighted forwards.
-
-        The classical forward never supplies W. A subclass can expose W in its
-        own forward and use this hook without duplicating tensor preparation.
-        """
-        y, x0, A_tensor, batch_size = self._prepare_forward_inputs(y, x0, A)
-        W_tensor = prepare_gradient_weight(W, A_tensor, y)
-        lam_value = self._resolve_lam_value(lam, batch_size, A_tensor)
-        gamma_value, theta_value = self._resolve_gamma_theta(
-            lam_value,
-            gamma,
-            batch_size,
-            A_tensor,
-        )
-        return y, x0, A_tensor, gamma_value, theta_value, W_tensor
 
     def _start_iterations(self, y):
         """Initialize callback-visible solver state."""
@@ -177,49 +160,32 @@ class ISTA(nn.Module):
             cb.on_step_begin(self, x)
         return not self.stop
 
-    def _on_iteration_end(self, x, gamma, theta, A_tensor, y, W_tensor=None):
+    def _on_iteration_end(self, x, gamma, theta, **callback_metadata):
         """Run end callbacks and report whether iteration should continue."""
-        if W_tensor is None:
-            W_tensor = A_tensor
         for cb in self.callbacks:
-            cb.on_step_end(self, x, gamma=gamma, theta=theta, A=A_tensor, W=W_tensor, y=y)
+            cb.on_step_end(self, x, gamma=gamma, theta=theta, **callback_metadata)
         return not self.stop
 
-    def _iteration_functions(self):
-        """Resolve gradient and shrinkage functions once per solve."""
-        return self.get_grad_func(), self.get_shrink_func()
-
-    def _init_solver_vector(self, y, x0, A_tensor):
+    def _init_solver_vector(self, y, x0, n_sources):
         """Initialize one solution-shaped vector."""
-        return y.new_zeros((y.shape[0], A_tensor.shape[-1])) if x0 is None else x0.clone()
+        return y.new_zeros((y.shape[0], n_sources)) if x0 is None else x0.clone()
 
-    def _iterate(self, y, x0, A_tensor, gamma_value, theta_value, t, Op_tensor=None):
+    def _iterate(self, y, x0, n_sources, gamma, theta, t, *, gradient, callback_metadata):
         """Run fixed-step ISTA with the solution local to this solve."""
-        if Op_tensor is None:
-            Op_tensor = A_tensor
-        grad_func, shrink_func = self._iteration_functions()
-        x = self._init_solver_vector(y, x0, A_tensor)
+        shrink_func = self.get_shrink_func()
+        x = self._init_solver_vector(y, x0, n_sources)
 
         self._start_iterations(y)
         for k in range(t):
             if not self._on_iteration_begin(k, x):
                 break
-            x = self.step(
-                y,
-                x,
-                A_tensor,
-                shrink_func,
-                grad_func,
-                gamma=gamma_value,
-                theta=theta_value,
-                Op=Op_tensor,
-            )
-            if not self._on_iteration_end(x, gamma_value, theta_value, A_tensor, y, W_tensor=Op_tensor):
+            x = self.step(x, gradient, shrink_func, gamma, theta)
+            if not self._on_iteration_end(x, gamma, theta, **callback_metadata):
                 break
         return x
 
-    def forward(self, y, x0=None, t=1, A=None, lam=None, gamma=None):
-        """Solve using A as the classical adjoint, without an independent weight.
+    def forward(self, y, x0=None, t=1, operator=None, lam=None, gamma=None):
+        """Solve with a fixed measurement operator, without an independent weight.
 
         All tensor inputs must already share y's dtype and device; mismatches
         raise ValueError. Convert arrays and move/cast tensors in preprocessing.
@@ -229,13 +195,13 @@ class ISTA(nn.Module):
             y (Tensor): measurements of shape ``(B, m)`` or ``(m,)``
             x0 (Tensor | None): optional init of shape ``(B, n)`` or ``(n,)``
             t (int): number of iterations
-            A (Tensor | None): real floating-point sensing matrix of shape
-                ``(m, n)`` or ``(B, m, n)``; treated as fixed (detached).
+            operator (LinearOperator): shared or per-problem measurement
+                operator, with dtype and device matching y; treated as fixed.
             lam (float | Tensor | None): required regularization
                 strength, scalar or per-sample with shape ``(B,)`` / ``(B, 1)``.
             gamma (float | Tensor | None): scalar or per-sample
                 step size. Defaults to ``1 / L`` with ``L = 1.05 * ||A||_2**2 / m``
-                (power-iteration estimate, see ``default_gamma_from_A``).
+                (power-iteration estimate, see ``default_gamma_from_operator``).
 
         Returns
         -------
@@ -244,8 +210,14 @@ class ISTA(nn.Module):
         if t < 0:
             msg = 't must be non-negative.'
             raise ValueError(msg)
-        y, x0, A_tensor, gamma_value, theta_value, Op_tensor = self._setup_forward(y, x0, A, lam, gamma)
-        return self._iterate(y, x0, A_tensor, gamma_value, theta_value, t, Op_tensor=Op_tensor)
+        y, x0, operator, batch_size = self._prepare_operator_inputs(y, x0, operator)
+        lam_value = self._resolve_lam_value(lam, batch_size, operator)
+        gamma_value, theta_value = self._resolve_gamma_theta(lam_value, gamma, batch_size, operator)
+        return self._iterate(
+            y, x0, operator.shape[1], gamma_value, theta_value, t,
+            gradient=self._make_gradient(y, operator, operator),
+            callback_metadata={'A': operator, 'W': operator, 'y': y},
+        )
 
 
 class FISTA(ISTA):
@@ -264,13 +236,11 @@ class FISTA(ISTA):
         z_next = x_next + (tk - 1.0) / t_next * (x_next - x)
         return t_next, z_next
 
-    def _iterate_accelerated(self, y, x0, A_tensor, t, step_params_fn, Op_tensor=None):
+    def _iterate_accelerated(self, y, x0, n_sources, t, step_params_fn, *, gradient, callback_metadata):
         """Run FISTA with local momentum and caller-provided step parameters."""
-        if Op_tensor is None:
-            Op_tensor = A_tensor
-        grad_func, shrink_func = self._iteration_functions()
-        x = self._init_solver_vector(y, x0, A_tensor)
-        z = self._init_solver_vector(y, x0, A_tensor)
+        shrink_func = self.get_shrink_func()
+        x = self._init_solver_vector(y, x0, n_sources)
+        z = self._init_solver_vector(y, x0, n_sources)
         tk = 1.0
 
         self._start_iterations(y)
@@ -278,29 +248,18 @@ class FISTA(ISTA):
             if not self._on_iteration_begin(k, x):
                 break
             gamma_k, theta_k = step_params_fn(k)
-            x_next = self.step(
-                y,
-                z,
-                A_tensor,
-                shrink_func,
-                grad_func,
-                gamma=gamma_k,
-                theta=theta_k,
-                Op=Op_tensor,
-            )
+            x_next = self.step(z, gradient, shrink_func, gamma_k, theta_k)
             tk, z = self._nesterov_momentum(tk, x, x_next)
             x = x_next
-            if not self._on_iteration_end(x, gamma_k, theta_k, A_tensor, y, W_tensor=Op_tensor):
+            if not self._on_iteration_end(x, gamma_k, theta_k, **callback_metadata):
                 break
         return x
 
-    def _iterate(self, y, x0, A_tensor, gamma_value, theta_value, t, Op_tensor=None):
+    def _iterate(self, y, x0, n_sources, gamma, theta, t, *, gradient, callback_metadata):
         """Run FISTA iterations with Nesterov momentum and return the solution."""
         return self._iterate_accelerated(
-            y,
-            x0,
-            A_tensor,
-            t,
-            step_params_fn=lambda _k: (gamma_value, theta_value),
-            Op_tensor=Op_tensor,
+            y, x0, n_sources, t,
+            step_params_fn=lambda _k: (gamma, theta),
+            gradient=gradient,
+            callback_metadata=callback_metadata,
         )

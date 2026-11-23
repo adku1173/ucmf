@@ -1,29 +1,27 @@
 """Single-weight Ada-LFISTA specifics; shared properties are in test_unfolded_models."""
 
 from ucmf import AdaLFISTASW
-from ucmf.optim import IterationCallback
+from ucmf.optim.operator import CMFPropagation
 
 import pytest
 import torch
 
 
-def test_callbacks_receive_effective_weight():
-    torch.manual_seed(0)
-    model = AdaLFISTASW(n_iterations=3, n_measurements=5, gamma_init=0.2, theta_init=0.01).double()
-    with torch.no_grad():
-        model.B.add_(0.2 * torch.randn_like(model.B))
-    A = torch.randn(5, 4, dtype=torch.float64)
-    seen = {}
+def test_parameter_names():
+    model = AdaLFISTASW(2, 3, 0.1, 0.01)
+    assert [name for name, _ in model.named_parameters()] == ['B', '_gamma', '_theta']
 
-    class Recorder(IterationCallback):
-        def on_step_end(self, solver, x, **kwargs):
-            seen.update(kwargs)
 
-    model.callbacks = [Recorder()]
-    with torch.no_grad():
-        model(torch.randn(2, 5, dtype=torch.float64), A=A, t=3)
-    torch.testing.assert_close(seen['A'], A)
-    torch.testing.assert_close(seen['W'], model.B.detach() @ A)  # effective adjoint W = B @ A
+def test_precomputed_rejects_matrix_free_operator():
+    operator = CMFPropagation(torch.ones(2, 3, dtype=torch.complex64))
+    model = AdaLFISTASW(1, 4, 0.2, 0.01, weight_mode='precomputed')
+    with pytest.raises(ValueError, match="'precomputed' requires a dense"):
+        model(torch.ones(4), operator=operator)
+
+
+def test_rejects_unknown_weight_mode():
+    with pytest.raises(ValueError, match='weight_mode'):
+        AdaLFISTASW(1, 4, 0.2, 0.01, weight_mode='auto')
 
 
 def test_rejects_auxiliary_weight_of_wrong_shape():

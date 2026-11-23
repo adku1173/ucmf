@@ -30,33 +30,6 @@ def validate_tensor(value, *, name, dtype=None, device=None):
         raise ValueError(msg)
 
 
-def prepare_sensing_matrix(A, *, dtype=None, device=None):
-    """Validate and prepare a fixed real sensing matrix for a solver call.
-
-    Accepts a shared matrix of shape ``(m, n)`` or batched matrices of shape
-    ``(B, m, n)``. Requires a real floating-point tensor, optionally with the
-    exact ``dtype``/``device``. The result is detached and contiguous, with its
-    original dtype and device unchanged. No column normalization is applied.
-    Raises ValueError for missing, complex, empty, mismatched, or incorrectly
-    ranked input.
-    """
-    if A is None:
-        msg = 'A must be provided in forward().'
-        raise ValueError(msg)
-
-    validate_tensor(A, name='A', dtype=dtype, device=device)
-    A_tensor = A.detach()
-
-    if A_tensor.ndim not in (2, 3):
-        msg = f'A must be 2D or 3D, got shape {tuple(A_tensor.shape)}'
-        raise ValueError(msg)
-
-    if 0 in A_tensor.shape[-2:]:
-        msg = 'A must have non-empty measurement and source dimensions.'
-        raise ValueError(msg)
-    return A_tensor.contiguous()
-
-
 def to_batch_vector(tensor, name):
     """Reshape a scalar or per-sample tensor for broadcasting over sources.
 
@@ -87,16 +60,16 @@ def apply_forward_operator(A, x):
     return torch.bmm(A, x.unsqueeze(-1)).squeeze(-1)
 
 
-def apply_adjoint_operator(v, Op):
+def apply_adjoint_operator(v, matrix):
     """Map real measurement vectors ``v`` back to source coordinates.
 
-    Applies the transpose of a shared operator ``Op`` of shape ``(m, n)`` or
-    batched operators of shape ``(B, m, n)`` to ``v`` of shape ``(B, m)``.
-    The result has shape ``(B, n)``; no measurement-count scaling is applied.
+    Applies the transpose of a shared ``(m, n)`` or batched ``(B, m, n)``
+    matrix to ``v`` of shape ``(B, m)``. The result has shape ``(B, n)``;
+    no measurement-count scaling is applied.
     """
-    if Op.ndim == 2:
-        return v @ Op
-    return torch.bmm(v.unsqueeze(1), Op).squeeze(1)
+    if matrix.ndim == 2:
+        return v @ matrix
+    return torch.bmm(v.unsqueeze(1), matrix).squeeze(1)
 
 
 DEFAULT_GAMMA_SAFETY = 1.05
@@ -118,6 +91,33 @@ def default_gamma_from_A(A):
         msg = 'A must have a finite, nonzero spectral norm when gamma is omitted.'
         raise ValueError(msg)
     return 1.0 / L
+
+
+@torch.no_grad()
+def default_gamma_from_operator(operator):
+    """Estimate ``m / (1.05 * ||A||_2**2)`` without materializing the operator.
+
+    A shared operator returns a scalar; a batched operator returns one step
+    size per problem. Power iteration gives a lower bound on the squared norm,
+    so the factor 1.05 is a heuristic margin, not a convergence guarantee.
+    """
+    m, n = operator.shape
+    batch_size = operator.batch_size
+    generator = torch.Generator(device='cpu').manual_seed(0)
+    v = torch.randn(
+        1 if batch_size is None else batch_size, n, generator=generator, dtype=operator.dtype, device='cpu',
+    ).to(operator.device)
+    v = v / torch.linalg.vector_norm(v, dim=-1, keepdim=True)
+    for _ in range(50):
+        # Apply A.T @ A without forming A or its Gram matrix.
+        v = operator.adjoint(operator.forward(v))
+        v = v / torch.linalg.vector_norm(v, dim=-1, keepdim=True)
+    # For unit v, ||A v||**2 is the Rayleigh quotient of A.T @ A.
+    L = DEFAULT_GAMMA_SAFETY * torch.linalg.vector_norm(operator.forward(v), dim=-1).square() / m
+    if torch.any(~torch.isfinite(L) | (L <= 0)):
+        raise ValueError('The operator must have a finite, nonzero spectral norm when gamma is omitted.')
+    gamma = 1.0 / L
+    return gamma.squeeze(0) if batch_size is None else gamma
 
 
 @torch.no_grad()
@@ -173,30 +173,6 @@ def resolve_batch_param(value, batch_size, name):
         return float(value)
     msg = f'{name} must be a real scalar or floating-point tensor.'
     raise ValueError(msg)
-
-
-def validate_shapes(y, x0, A):
-    """Check that prepared measurements, warm start, and sensing matrix agree.
-
-    Expects ``y`` of shape ``(B, m)`` and a shared ``(m, n)`` or batched
-    ``(B, m, n)`` matrix ``A``. If given, ``x0`` must have shape ``(B, n)``.
-    Raises ValueError on incompatible dimensions; returns None on success.
-    """
-    if A.ndim == 2:
-        m, n = A.shape
-        if y.shape[1] != m:
-            msg = f'y has shape {tuple(y.shape)} but A has shape {tuple(A.shape)}'
-            raise ValueError(msg)
-        batch_size = y.shape[0]
-    else:
-        batch_size, m, n = A.shape
-        if y.shape[0] != batch_size or y.shape[1] != m:
-            msg = f'y has shape {tuple(y.shape)} but A has shape {tuple(A.shape)}'
-            raise ValueError(msg)
-
-    if x0 is not None and tuple(x0.shape) != (batch_size, n):
-        msg = f'x0 has shape {tuple(x0.shape)} but expected {(batch_size, n)}'
-        raise ValueError(msg)
 
 
 def validate_unfolded_iterations(t, n_iterations):

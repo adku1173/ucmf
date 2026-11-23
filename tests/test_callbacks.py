@@ -9,6 +9,7 @@ from ucmf.optim import (
     SolutionChangeStopper,
     StepParamCollector,
 )
+from ucmf.optim.operator import MatrixMult
 
 import pytest
 import torch
@@ -20,7 +21,7 @@ def test_default_step_and_threshold_use_normalized_objective(solver_type):
     solver = solver_type(positive=False, callbacks=[collector])
     A = torch.tensor([[1.0, 0.0], [0.0, 2.0], [0.0, 0.0]])
 
-    solver(torch.zeros(1, 3), A=A, lam=0.2, t=1)
+    solver(torch.zeros(1, 3), operator=MatrixMult(A), lam=0.2, t=1)
 
     # gamma = m / (1.05 * ||A||_2**2) = 3 / (1.05 * 4); theta = lam * gamma.
     torch.testing.assert_close(collector.gammas_tensor, torch.tensor([0.75 / 1.05]))
@@ -32,7 +33,8 @@ def test_step_collector_handles_scalars_and_per_sample_values(gamma):
     collector = StepParamCollector()
     y = torch.ones(2, 2, dtype=torch.float64)
     prepared_gamma = torch.as_tensor(gamma, dtype=y.dtype) if not isinstance(gamma, float) else gamma
-    FISTA(callbacks=[collector])(y, A=torch.eye(2, dtype=y.dtype), lam=0.2, gamma=prepared_gamma, t=3)
+    operator = MatrixMult(torch.eye(2, dtype=y.dtype))
+    FISTA(callbacks=[collector])(y, operator=operator, lam=0.2, gamma=prepared_gamma, t=3)
     expected_gamma = torch.as_tensor(gamma, dtype=y.dtype)
     if expected_gamma.ndim:
         expected_gamma = expected_gamma.unsqueeze(-1)
@@ -52,7 +54,7 @@ def test_step_collector_handles_scalars_and_per_sample_values(gamma):
 def test_step_collector_detaches_and_copies_parameters():
     collector = StepParamCollector()
     gamma = torch.tensor(0.5, requires_grad=True)
-    FISTA(callbacks=[collector])(torch.ones(2), A=torch.eye(2), lam=0.1, gamma=gamma, t=1)
+    FISTA(callbacks=[collector])(torch.ones(2), operator=MatrixMult(torch.eye(2)), lam=0.1, gamma=gamma, t=1)
     with torch.no_grad():
         gamma.fill_(2.0)
 
@@ -64,7 +66,7 @@ def test_step_collector_detaches_and_copies_parameters():
 @pytest.mark.parametrize('solver_type', [ISTA, FISTA])
 def test_callbacks_receive_ordered_iterations_and_classical_adjoint(solver_type):
     events = []
-    A = torch.eye(2)
+    A = torch.eye(2, requires_grad=True)
     y = torch.ones(1, 2)
 
     class Recorder(IterationCallback):
@@ -73,14 +75,16 @@ def test_callbacks_receive_ordered_iterations_and_classical_adjoint(solver_type)
 
         def on_step_end(self, solver, x, **kwargs):
             events.append(('end', solver.iter))
-            torch.testing.assert_close(kwargs['A'], A)
-            torch.testing.assert_close(kwargs['W'], A)
+            operator = kwargs['A']
+            assert isinstance(operator, MatrixMult) and kwargs['W'] is operator
+            torch.testing.assert_close(operator.matrix, A)
+            assert not operator.matrix.requires_grad
             torch.testing.assert_close(kwargs['y'], y)
             torch.testing.assert_close(solver.y, y)
             assert kwargs['gamma'] == 0.2
             assert kwargs['theta'] == pytest.approx(0.02)
 
-    solver_type(callbacks=[Recorder()])(y, A=A, lam=0.1, gamma=0.2, t=3)
+    solver_type(callbacks=[Recorder()])(y, operator=MatrixMult(A), lam=0.1, gamma=0.2, t=3)
     assert events == [(event, k) for k in range(3) for event in ('begin', 'end')]
 
 
@@ -99,7 +103,9 @@ def test_custom_callbacks_can_stop_at_either_boundary(solver_type, stop_at):
                 solver.stop = True
 
     # gamma = m / ||A||_2**2 = 2: one step solves A = I exactly.
-    actual = solver_type(callbacks=[Stop(), outputs])(torch.ones(2), A=torch.eye(2), lam=0.0, gamma=2.0, t=8)
+    actual = solver_type(callbacks=[Stop(), outputs])(
+        torch.ones(2), operator=MatrixMult(torch.eye(2)), lam=0.0, gamma=2.0, t=8,
+    )
 
     completed = 0 if stop_at == 'begin' else 1
     assert len(outputs.intermediates) == completed
@@ -112,7 +118,7 @@ def test_stopper_converges_and_resets_between_solves(solver_type):
     outputs = IntermediateOutputCollector()
     solver = solver_type(callbacks=[stopper, outputs])
     # gamma = m / ||A||_2**2 = 3: one step solves A = I exactly.
-    x = solver(torch.ones(2, 3), A=torch.eye(3), lam=0.0, gamma=3.0, t=100)
+    x = solver(torch.ones(2, 3), operator=MatrixMult(torch.eye(3)), lam=0.0, gamma=3.0, t=100)
 
     torch.testing.assert_close(x, torch.ones(2, 3))
     assert stopper.converged
@@ -120,7 +126,7 @@ def test_stopper_converges_and_resets_between_solves(solver_type):
     assert stopper.n_steps == 2
     assert len(outputs.intermediates) == 2
 
-    solver(torch.zeros(2, 3), A=torch.eye(3), lam=0.0, gamma=3.0, t=100)
+    solver(torch.zeros(2, 3), operator=MatrixMult(torch.eye(3)), lam=0.0, gamma=3.0, t=100)
     assert stopper.converged
     assert stopper.stop_iter == 0
     assert stopper.n_steps == 1
@@ -131,14 +137,14 @@ def test_stopper_converges_and_resets_between_solves(solver_type):
 def test_stopper_checks_only_every_check_every_steps(solver_type):
     stopper = SolutionChangeStopper(tol=1e-9, check_every=5)
     solver = solver_type(callbacks=[stopper])
-    solver(torch.ones(2, 3), A=torch.eye(3), lam=0.0, gamma=3.0, t=100)
+    solver(torch.ones(2, 3), operator=MatrixMult(torch.eye(3)), lam=0.0, gamma=3.0, t=100)
     assert stopper.converged
     assert stopper.stop_iter == 4
     assert stopper.n_steps == 5
 
     stopper = SolutionChangeStopper(tol=1e-9, check_every=5)
     solver = solver_type(callbacks=[stopper])
-    solver(torch.ones(2, 3), A=torch.eye(3), lam=0.0, gamma=3.0, t=3)
+    solver(torch.ones(2, 3), operator=MatrixMult(torch.eye(3)), lam=0.0, gamma=3.0, t=3)
     assert not stopper.converged
     assert stopper.last_change is None
     assert stopper.n_steps == 3
@@ -186,13 +192,13 @@ def test_intermediate_outputs_keep_autograd_graph_and_reset(solver_type):
     collector = IntermediateOutputCollector()
     solver = solver_type(callbacks=[collector])
     y = torch.ones(1, 2, requires_grad=True)
-    solver(y, A=torch.eye(2), gamma=0.5, lam=0.0, t=4)
+    solver(y, operator=MatrixMult(torch.eye(2)), gamma=0.5, lam=0.0, t=4)
     assert len(collector.intermediates) == 4
     assert all(x.requires_grad for x in collector.intermediates)
     sum(x.square().sum() for x in collector.intermediates).backward()
     assert y.grad is not None and torch.all(y.grad > 0)
 
-    solver(y.detach(), A=torch.eye(2), lam=0.0, t=2)
+    solver(y.detach(), operator=MatrixMult(torch.eye(2)), lam=0.0, t=2)
     assert len(collector.intermediates) == 2
     collector.reset()
     assert collector.intermediates == []

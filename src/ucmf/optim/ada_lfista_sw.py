@@ -2,8 +2,8 @@
 
 ``AdaLFISTASW`` augments FISTA with three sets of trainable parameters:
 
-    - ``B``: a single ``m x m`` auxiliary weight matrix forming the effective adjoint-side
-      gradient weight ``W = B @ A``. With ``B = I`` the update reduces to FISTA.
+    - ``B``: a single ``m x m`` auxiliary weight matrix. The effective weight
+      ``W = B @ A`` is factored by default. With ``B = I`` the update reduces to FISTA.
     - ``gamma``: per-iteration step sizes actually applied at each iteration.
     - ``theta``: per-iteration soft-thresholds actually applied at each iteration.
 
@@ -18,7 +18,7 @@ with Nesterov momentum. Neither ``lam`` nor ``gamma`` are passed to
 
 from .ista import FISTA
 from .utils import softplus_inverse, validate_unfolded_iterations
-from .weights import apply_auxiliary_weight, measurement_subset_weight, prepare_gradient_weight
+from .weights import make_weight_operator
 
 import torch
 import torch.nn.functional as F
@@ -37,6 +37,9 @@ class AdaLFISTASW(FISTA):
         callbacks (list | None): optional solver callbacks.
         B (Tensor | None): optional ``(m, m)`` init for the auxiliary weight matrix;
             defaults to the identity, reproducing classical FISTA.
+        weight_mode (str): ``'factored'`` applies ``A.T @ (B.T @ r)`` without
+            forming ``W``. ``'precomputed'`` forms ``W = B @ A`` once per solve
+            and requires a dense ``MatrixMult`` or ``CMFDictionary`` operator.
     """
 
     def __init__(
@@ -48,8 +51,13 @@ class AdaLFISTASW(FISTA):
         positive=True,
         callbacks=None,
         B=None,
+        *,
+        weight_mode='factored',
     ):
         super().__init__(positive=positive, callbacks=callbacks)
+        if weight_mode not in ('factored', 'precomputed'):
+            raise ValueError("weight_mode must be 'factored' or 'precomputed'.")
+        self.weight_mode = weight_mode
         if n_iterations <= 0:
             raise ValueError(f'n_iterations must be positive, got {n_iterations}')
         self.n_iterations = n_iterations
@@ -76,47 +84,23 @@ class AdaLFISTASW(FISTA):
         """Per-iteration soft-thresholds actually applied (``softplus(_theta)``)."""
         return F.softplus(self._theta)
 
-    def _effective_weight(self, A_tensor, msm_subset):
-        """Return the effective adjoint-side weight for this solve.
+    def forward(self, y, x0=None, t=1, operator=None):
+        """Run Ada-LFISTA-SW with a fixed measurement operator and learned weights.
 
-        The forward operator stays ``A``; only the adjoint ``A.T`` is replaced by
-        ``W.T``. ``B = I`` gives ``W = A``, i.e. classical FISTA. For a reduced
-        measurement set ``I`` the full ``B`` is restricted to the active rows and
-        columns, so the gradient only couples active measurements.
-        """
-        if msm_subset is None:
-            # W = B @ A on the full measurement set.
-            if A_tensor.shape[-2] != self.n_measurements:
-                raise ValueError(f'A has {A_tensor.shape[-2]} measurements but B expects {self.n_measurements}.')
-            return apply_auxiliary_weight(self.B, A_tensor)
-        # W_sub = B[I, I] @ A_sub on the reduced measurement set I = msm_subset.
-        return measurement_subset_weight(self.B, A_tensor, msm_subset)
-
-    def forward(self, y, x0=None, t=1, A=None, msm_subset=None):
-        """Run single-weight Ada-LFISTA with learned ``gamma``/``theta`` and ``W = B @ A``.
-
-        All tensor inputs and the model's parameters must already share ``y``'s
-        dtype and device. ``msm_subset`` is an optional integer index tensor
-        (``(m_sub,)`` or per-sample ``(B, m_sub)``) naming the original rows of
-        the already-subsetted ``y``/``A``; it restricts ``B`` to ``B[I, I]``.
+        Inputs and model parameters must already share ``y``'s dtype and device.
+        For a subset, ``y`` must follow ``operator.rows`` in the full measurement
+        coordinates of ``B``. Row indices must be in range.
         """
         validate_unfolded_iterations(t, self.n_iterations)
-        # The shared hook also returns the batch size for per-sample lam/gamma in
-        # classical solvers; this model learns gamma/theta, so it is discarded.
-        y, x0, A_tensor, _ = self._prepare_forward_inputs(y, x0, A)
-        # W = B @ A, validated against A's shape and returned unchanged so the
-        # autograd graph through B is preserved. The layer update then is
-        #   x_{k+1} = shrink(z_k + gamma_k * W.T @ (y - A @ z_k) / m, theta_k).
-        W_tensor = prepare_gradient_weight(self._effective_weight(A_tensor, msm_subset), A_tensor, y)
+        y, x0, operator, _ = self._prepare_operator_inputs(y, x0, operator)
+        weight_operator = make_weight_operator(operator, self.B, self.weight_mode)
         # gamma = softplus(_gamma), theta = softplus(_theta): applied once here,
         # then unbound into per-layer scalars so the loop only does tuple indexing
         # (no per-layer tensor __getitem__ dispatch). unbind keeps the autograd graph.
         gammas, thetas = self.gamma.unbind(), self.theta.unbind()
         return self._iterate_accelerated(
-            y,
-            x0,
-            A_tensor,
-            t,
+            y, x0, operator.shape[1], t,
             step_params_fn=lambda k: (gammas[k], thetas[k]),
-            Op_tensor=W_tensor,
+            gradient=self._make_gradient(y, operator, weight_operator),
+            callback_metadata={'A': operator, 'W': weight_operator, 'y': y},
         )

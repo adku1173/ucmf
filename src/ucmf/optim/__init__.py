@@ -1,6 +1,7 @@
 """Classical sparse solvers and their problem-independent helpers."""
 
 from .ada_lfista import AdaLFISTA
+from .ada_lfista_r import AdaLFISTAR
 from .ada_lfista_sw import AdaLFISTASW
 from .ada_lfista_swr import AdaLFISTASWR
 from .callbacks import (
@@ -15,6 +16,7 @@ from .preprocessing import normalize_sensing_matrix_columns
 
 __all__ = [
     'AdaLFISTA',
+    'AdaLFISTAR',
     'AdaLFISTASW',
     'AdaLFISTASWR',
     'FISTA',

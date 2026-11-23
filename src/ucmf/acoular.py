@@ -30,6 +30,7 @@ from acoular.internal import digest
 from acoular.solvers import LeastSquaresSolver, SolverOutput
 
 from .optim import FISTA, ISTA, SolutionChangeStopper
+from .optim.operator import MatrixMult
 
 import torch
 from traits.api import Enum, Float, Int, Property, Str, Union, cached_property
@@ -79,13 +80,13 @@ class TorchSolver(LeastSquaresSolver):
         otherwise it is empty.
         """
         dtype = getattr(torch, self.precision)
-        A = torch.as_tensor(dictionary_matrix, dtype=dtype, device=self.device)
+        operator = MatrixMult(torch.as_tensor(dictionary_matrix, dtype=dtype, device=self.device))
         y = torch.as_tensor(data, dtype=dtype, device=self.device)
         x0 = None if start_value is None else torch.as_tensor(start_value, dtype=dtype, device=self.device)
         stopper = None if self.tol is None else SolutionChangeStopper(tol=self.tol, check_every=self.check_every)
         solver = self._create_solver(positive=problem.nonnegative, callbacks=[] if stopper is None else [stopper])
         with torch.no_grad():
-            x = solver(y, x0=x0, t=self.n_iter, A=A, lam=problem.alpha * problem.unit_mult)
+            x = solver(y, x0=x0, t=self.n_iter, operator=operator, lam=problem.alpha * problem.unit_mult)
         info = {} if stopper is None else {'n_steps': stopper.n_steps, 'converged': stopper.converged}
         return SolverOutput(solution=x[0].cpu().numpy(), info=info)
 

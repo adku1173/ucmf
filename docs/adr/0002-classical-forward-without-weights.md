@@ -1,6 +1,9 @@
 # 0002: Keep independent weights out of classical forward
 
-Status: Accepted — requested by the author.
+Status: Accepted — requested by the author. The tensor helper
+`_setup_forward(..., W=...)` below is removed: since
+[0007](0007-operators-instead-of-matrices.md) every model passes A and W as
+operators. The public forward decision stands.
 
 ## Context
 

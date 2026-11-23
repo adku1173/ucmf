@@ -4,6 +4,7 @@ import inspect
 import math
 
 from ucmf import FISTA, ISTA
+from ucmf.optim.operator import CMFDictionary, CMFPropagation, MatrixMult
 from ucmf.optim.utils import default_gamma_from_A
 
 import numpy as np
@@ -61,7 +62,7 @@ def test_matches_independent_numpy_iterations(solver_type, positive, batched_A, 
     actual = solver_type(positive=positive)(
         torch.from_numpy(y),
         x0=torch.from_numpy(x0),
-        A=torch.from_numpy(A),
+        operator=MatrixMult(torch.from_numpy(A)),
         lam=torch.from_numpy(lam),
         gamma=None if gamma is None else torch.from_numpy(gamma),
         t=9,
@@ -74,6 +75,18 @@ def test_matches_independent_numpy_iterations(solver_type, positive, batched_A, 
 
 
 @pytest.mark.parametrize('solver_type', SOLVERS)
+@pytest.mark.parametrize('batched', [False, True])
+def test_cmf_representations_agree_with_default_step(solver_type, batched):
+    rng = torch.Generator().manual_seed(7)
+    H = torch.randn((2, 3, 4) if batched else (3, 4), dtype=torch.complex128, generator=rng)
+    y = torch.randn(2, 6, dtype=torch.float64, generator=rng)
+    solver = solver_type(positive=False)
+    expected = solver(y, operator=CMFDictionary(H, r_diag=True), lam=0.01, t=8)
+    actual = solver(y, operator=CMFPropagation(H, r_diag=True), lam=0.01, t=8)
+    torch.testing.assert_close(actual, expected, rtol=1e-11, atol=1e-12)
+
+
+@pytest.mark.parametrize('solver_type', SOLVERS)
 @pytest.mark.parametrize('positive', [True, False])
 def test_orthogonal_problem_has_analytic_lasso_solution(solver_type, positive):
     y = torch.tensor([1.0, -2.0, 0.01, -0.01], dtype=torch.float64)
@@ -81,7 +94,7 @@ def test_orthogonal_problem_has_analytic_lasso_solution(solver_type, positive):
     lam = 0.1
     expected = (y - 4 * lam).clamp_min(0) if positive else y.sign() * (y.abs() - 4 * lam).clamp_min(0)
 
-    actual = solver_type(positive=positive)(y, A=A, lam=lam, t=8)
+    actual = solver_type(positive=positive)(y, operator=MatrixMult(A), lam=lam, t=8)
 
     torch.testing.assert_close(actual, expected.unsqueeze(0))
 
@@ -93,7 +106,7 @@ def test_solution_satisfies_normalized_lasso_kkt(solver_type, positive):
     A = torch.randn(9, 4, generator=rng, dtype=torch.float64)
     y = torch.randn(2, 9, generator=rng, dtype=torch.float64)
     lam = 0.015
-    x = solver_type(positive=positive)(y, A=A, lam=lam, t=1000)
+    x = solver_type(positive=positive)(y, operator=MatrixMult(A), lam=lam, t=1000)
     grad = ((x @ A.T - y) @ A) / A.shape[0]
     active = x.abs() > 1e-9
 
@@ -110,7 +123,7 @@ def test_gradient_normalization_and_explicit_column_scaling(solver_type):
     A = torch.tensor([[3.0, 0.0], [4.0, 2.0]])
     y = torch.ones(1, 2)
 
-    actual = solver_type(positive=False)(y, A=A, lam=0.0, gamma=1.0, t=1)
+    actual = solver_type(positive=False)(y, operator=MatrixMult(A), lam=0.0, gamma=1.0, t=1)
 
     torch.testing.assert_close(actual, torch.tensor([[3.5, 1.0]]))
 
@@ -129,7 +142,7 @@ def test_scalar_and_per_sample_parameters(solver_type, parameter_form):
 
     y = torch.tensor([[1.0, -2.0], [3.0, -4.0]], dtype=torch.float64)
     actual = solver_type(positive=False)(
-        y, A=torch.eye(2, dtype=y.dtype), lam=parameter(0.1), gamma=parameter(1.0), t=1
+        y, operator=MatrixMult(torch.eye(2, dtype=y.dtype)), lam=parameter(0.1), gamma=parameter(1.0), t=1
     )
     expected = y.sign() * (y.abs() / 2 - 0.1).clamp_min(0)
 
@@ -139,11 +152,12 @@ def test_scalar_and_per_sample_parameters(solver_type, parameter_form):
 @pytest.mark.parametrize('solver_type', SOLVERS)
 def test_zero_steps_clones_warm_start_and_preserves_batch_output(solver_type):
     x0 = torch.tensor([2.0, 3.0])
-    actual = solver_type()(torch.ones(2), x0=x0, A=torch.eye(2), lam=0.0, t=0)
+    operator = MatrixMult(torch.eye(2))
+    actual = solver_type()(torch.ones(2), x0=x0, operator=operator, lam=0.0, t=0)
 
     torch.testing.assert_close(actual, x0.unsqueeze(0))
     assert actual.data_ptr() != x0.data_ptr()
-    torch.testing.assert_close(solver_type()(torch.ones(2), A=torch.eye(2), lam=0.0, t=0), torch.zeros(1, 2))
+    torch.testing.assert_close(solver_type()(torch.ones(2), operator=operator, lam=0.0, t=0), torch.zeros(1, 2))
 
 
 @pytest.mark.parametrize('solver_type', SOLVERS)
@@ -152,7 +166,7 @@ def test_sensing_matrix_is_fixed_but_measurements_remain_differentiable(solver_t
     y = torch.ones(1, 2, requires_grad=True)
     solver = solver_type()
     # gamma = m / ||A||_2**2 = 2: each step solves A = I exactly.
-    solver(y, A=A, lam=0.0, gamma=2.0, t=2).sum().backward()
+    solver(y, operator=MatrixMult(A), lam=0.0, gamma=2.0, t=2).sum().backward()
 
     assert A.grad is None
     torch.testing.assert_close(y.grad, torch.ones_like(y))
@@ -169,7 +183,7 @@ def test_autograd_through_measurements_warm_start_and_step_parameters(solver_typ
     solver = solver_type(positive=False)
 
     assert torch.autograd.gradcheck(
-        lambda y, x0, lam, gamma: solver(y, x0=x0, A=A, lam=lam, gamma=gamma, t=4),
+        lambda y, x0, lam, gamma: solver(y, x0=x0, operator=MatrixMult(A), lam=lam, gamma=gamma, t=4),
         (y, x0, lam, gamma),
     )
 
@@ -178,24 +192,23 @@ def test_autograd_through_measurements_warm_start_and_step_parameters(solver_typ
 def test_preprocessed_inputs_and_noncontiguous_sensing_matrix(solver_type):
     y = torch.tensor([1.0, 2.0], dtype=torch.float64)
     solver = solver_type()
-    expected = solver(y, A=torch.eye(2, dtype=y.dtype), lam=0.0, t=2)
+    expected = solver(y, operator=MatrixMult(torch.eye(2, dtype=y.dtype)), lam=0.0, t=2)
     for A in ([[1, 0], [0, 1]], np.eye(2), torch.eye(2, dtype=torch.int64), torch.eye(2).T):
         prepared_A = torch.as_tensor(A, dtype=y.dtype, device=y.device)
-        torch.testing.assert_close(solver(y, A=prepared_A, lam=0.0, t=2), expected)
+        torch.testing.assert_close(solver(y, operator=MatrixMult(prepared_A), lam=0.0, t=2), expected)
 
 
 @pytest.mark.parametrize('solver_type', SOLVERS)
 @pytest.mark.parametrize(
     ('overrides', 'message'),
     [
-        ({'A': None}, 'A must be provided'),
+        ({'operator': None}, 'operator must be a LinearOperator'),
+        ({'operator': torch.eye(2)}, 'operator must be a LinearOperator'),
         ({'lam': None}, 'lam must be provided'),
-        ({'A': torch.ones(2)}, 'A must be 2D or 3D'),
-        ({'A': torch.ones(3, 2)}, 'y has shape'),
-        ({'A': torch.ones(3, 2, 2)}, 'y has shape'),
-        ({'A': torch.ones(2, 0)}, 'non-empty'),
-        ({'A': torch.zeros(2, 2)}, 'nonzero spectral norm'),
-        ({'A': torch.eye(2, dtype=torch.complex64)}, 'A must be real-valued'),
+        ({'operator': MatrixMult(torch.ones(3, 2))}, 'y has shape'),
+        ({'operator': MatrixMult(torch.ones(3, 2, 2))}, 'y has shape'),
+        ({'operator': MatrixMult(torch.ones(2, 0))}, 'non-empty'),
+        ({'operator': MatrixMult(torch.zeros(2, 2))}, 'nonzero spectral norm'),
         ({'y': torch.tensor(1.0)}, 'y must be a real floating-point tensor'),
         ({'y': torch.ones(1, 1, 2)}, 'y must be a real floating-point tensor'),
         ({'y': torch.ones(2, 2, dtype=torch.int64)}, 'y must be a real floating-point tensor'),
@@ -207,7 +220,7 @@ def test_preprocessed_inputs_and_noncontiguous_sensing_matrix(solver_type):
     ],
 )
 def test_invalid_inputs_raise_clear_errors(solver_type, overrides, message):
-    inputs = {'y': torch.ones(2, 2), 'A': torch.eye(2), 'lam': 0.1, 't': 1}
+    inputs = {'y': torch.ones(2, 2), 'operator': MatrixMult(torch.eye(2)), 'lam': 0.1, 't': 1}
     inputs.update(overrides)
     with pytest.raises(ValueError, match=message):
         solver_type()(**inputs)
@@ -215,14 +228,16 @@ def test_invalid_inputs_raise_clear_errors(solver_type, overrides, message):
 
 @pytest.mark.parametrize('solver_type', SOLVERS)
 def test_forward_exposes_only_classical_solver_inputs(solver_type):
-    assert list(inspect.signature(solver_type.forward).parameters) == ['self', 'y', 'x0', 't', 'A', 'lam', 'gamma']
+    assert list(inspect.signature(solver_type.forward).parameters) == [
+        'self', 'y', 'x0', 't', 'operator', 'lam', 'gamma',
+    ]
 
 
 @pytest.mark.parametrize('solver_type', SOLVERS)
 @pytest.mark.parametrize('weight', [None, torch.eye(2)])
 def test_forward_rejects_independent_gradient_weights(solver_type, weight):
     with pytest.raises(TypeError, match="unexpected keyword argument 'W'"):
-        solver_type()(torch.ones(2), A=torch.eye(2), lam=0.0, W=weight)
+        solver_type()(torch.ones(2), operator=MatrixMult(torch.eye(2)), lam=0.0, W=weight)
 
 
 @pytest.mark.parametrize('solver_type', SOLVERS)
@@ -241,16 +256,16 @@ def test_removed_gradient_mode_is_not_silently_accepted(solver_type, mode):
 
 @pytest.mark.parametrize('solver_type', SOLVERS)
 @pytest.mark.parametrize('batched_A', [True, False])
-def test_ls_gradient_hook_matches_normalized_adjoint_residual(solver_type, batched_A):
+def test_one_step_matches_normalized_adjoint_residual(solver_type, batched_A):
     A = torch.tensor([[1.0, 0.1], [0.3, 1.5]], dtype=torch.float64)
     if batched_A:
         A = torch.stack([A, 2 * A])
     y = torch.tensor([[1.0, 2.0], [0.5, 0.8]], dtype=A.dtype)
     x = torch.tensor([[0.2, 0.3], [0.1, 0.2]], dtype=A.dtype)
     residual = y - (A @ x.unsqueeze(-1)).squeeze(-1)
-    expected = (residual.unsqueeze(-2) @ A).squeeze(-2) / y.shape[1]
-    grad = solver_type().get_grad_func()(y, x, A)
-    torch.testing.assert_close(grad, expected)
+    expected = x + (residual.unsqueeze(-2) @ A).squeeze(-2) / y.shape[1]
+    actual = solver_type(positive=False)(y, x0=x, operator=MatrixMult(A), lam=0.0, gamma=1.0, t=1)
+    torch.testing.assert_close(actual, expected)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA is not available')
@@ -262,10 +277,10 @@ def test_cuda_matches_cpu_with_batched_operators_and_autograd(solver_type, dtype
     y = torch.randn(2, 5, generator=rng, dtype=dtype)
     lam = torch.tensor([0.01, 0.03], dtype=dtype)
     solver = solver_type(positive=False)
-    expected = solver(y, A=A, lam=lam, t=15)
+    expected = solver(y, operator=MatrixMult(A), lam=lam, t=15)
     y_cuda = y.cuda().requires_grad_()
 
-    actual = solver(y_cuda, A=A.cuda(), lam=lam.cuda(), t=15)
+    actual = solver(y_cuda, operator=MatrixMult(A.cuda()), lam=lam.cuda(), t=15)
     actual.square().sum().backward()
 
     torch.testing.assert_close(actual.cpu(), expected, rtol=2e-5, atol=2e-6)
