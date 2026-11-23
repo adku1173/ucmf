@@ -2,7 +2,6 @@
 
 # Acoular must be loaded before NumPy (imported via ucmf/torch).
 import acoular  # noqa: F401
-
 from ucmf import FISTA, ISTA, AdaLFISTA, AdaLFISTASW
 
 import pytest

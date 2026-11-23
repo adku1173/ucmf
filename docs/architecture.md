@@ -9,7 +9,7 @@ x = solver(y, x0=None, t=100, A=A, lam=0.01, gamma=None)
 
 ISTA has the same interface. There is no public W input and no gradient-mode
 selector: both classes use normalized least squares. See
-[domain vocabulary](../GLOSSARY.md) and [the current decision](adr/0003-local-loops-and-ls-only.md).
+[the current decision](adr/0003-local-loops-and-ls-only.md).
 
 ## Read the algorithm directly
 
@@ -89,8 +89,8 @@ and the caller assigns `x = x_next`.
 
 This is the same straightforward control-flow pattern as
 [NA-ALISTA's reference implementation](https://github.com/feeds/na-alista/blob/master/utils/algorithms.py).
-No state dataclass is needed for autograd, and no unfolded production model is
-introduced here. The seam is the concrete schedule or model-owned loop, not a
+No state dataclass is needed for autograd. The seam is the concrete schedule
+or model-owned loop, not a
 universal controller framework; locality and leverage come from the shared
 mathematics and callback helpers rather than another adapter.
 
@@ -113,6 +113,38 @@ This illustration is not an unfolded model implementation. A real model may
 construct W from its own parameters. Protected preparation preserves shared /
 batched weight validation, dtype/device compatibility checks, and W's autograd graph.
 The classical automatic LS step-size guarantee need not hold for W != A.
+
+## Single-weight Ada-LFISTA
+
+`AdaLFISTASW` (`src/ucmf/optim/ada_lfista_sw.py`) is the first production unfolded model
+and follows the pattern above; see [0004](adr/0004-single-weight-ada-lfista.md).
+
+```text
+forward(y, x0, t, A, msm_subset)
+    validate_unfolded_iterations(t, n_iterations)
+    _prepare_forward_inputs                  # no lam/gamma: both are learned
+    W = B @ A            (msm_subset is None)
+    W = B[I, I] @ A_sub  (msm_subset = I)    # weights.py helpers
+    prepare_gradient_weight(W, A, y)         # validates, keeps autograd
+    _iterate_accelerated(..., step_params_fn=k -> (gamma[k], theta[k]))
+        x_next = shrink(z + gamma_k * W.T @ (y - A @ z) / m, theta_k)
+```
+
+Trainable parameters are `B` (identity init), `_gamma` and `_theta`; the
+properties `gamma` / `theta` are the applied, softplus-constrained values.
+`W` is formed once per solve. `msm_subset` indices must lie in `[0, m)`; this is
+guaranteed by the index generator, not checked on the device.
+
+`compile_unrolled(model, t_max)` (`compile.py`) compiles one graph for `t_max`
+iterations and returns all iterates `(t_max, B, n)` via an
+`IntermediateOutputCollector`. Staged training uses `out[t - 1]` without a
+recompilation per stage.
+
+`AdaLFISTA` (`ada_lfista.py`, [0006](adr/0006-two-matrix-ada-lfista.md)) uses
+the same structure with `R = B1 @ A`, `M = B2 @ A`. It passes
+`Op = (M, M.T @ y, R)` through `_iterate_accelerated` and overrides `ls_grad`
+(`(M.T @ y - R.T @ (R @ z)) / m`) and `_on_iteration_end` (`W = M`,
+`W_recurrent = R`).
 
 ## Intentional removals
 

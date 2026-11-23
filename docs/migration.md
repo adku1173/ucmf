@@ -13,6 +13,8 @@ not a runtime dependency.
 | `weights.py` | Protected weight preparation for subclass-owned forwards |
 | `preprocessing.py` | Explicit column normalization |
 | general classes in `callbacks.py` | Stopping, parameter histories, intermediate outputs |
+| `ada.py` (`AdaptiveGradientWrapper`) + `alfista.py` (`ALFISTA`) | `ada_lfista_sw.py`: `AdaLFISTASW` (model `ADA-ALFISTA`, paper name Ada-LFISTA-SW) |
+| `lfista.py` (`LFISTA`, `TwoMatrixGradientWrapper`) | `ada_lfista.py`: `AdaLFISTA` (model `ADA-LFISTA`, paper name Ada-LFISTA) |
 
 The package does not import the source optimizer initializer, training stack,
 or acoustic callbacks. Runtime dependencies are only PyTorch and NumPy.
@@ -21,7 +23,6 @@ or acoustic callbacks. Runtime dependencies are only PyTorch and NumPy.
 
 - Objective: `||y - A x||² / (2 m) + lam * ||x||₁`.
 - Negative gradient: `A.T @ residual / m`; threshold: `gamma * lam`.
-- Default step: `1 / (||A||₂² / m)`, separately per batched A.
 - Positive/signed shrinkage and the same FISTA/Nesterov recurrence.
 - Shared/batched matrices, scalar/per-sample parameters, and cloned warm starts.
 - Always-batched outputs and fixed/detached A; output dtype/device match y.
@@ -29,6 +30,11 @@ or acoustic callbacks. Runtime dependencies are only PyTorch and NumPy.
 - Explicit column normalization and physical-coordinate rescaling.
 - Callback order/keywords, zero-based iteration indices, begin/end stopping,
   relative/absolute batch convergence, and intermediate computational graphs.
+
+Changed: the default step is `1 / L` with `L = 1.05 * ||A||₂² / m`, where
+`||A||₂²` is estimated by 50 power iterations (separately per batched A)
+instead of the exact eigenvalue; default-step results therefore differ
+slightly from the source. See [0005](adr/0005-power-iteration-default-step.md).
 
 `StepParamCollector` also accepts Python scalars, correcting a source failure
 when gamma was an explicit float. Invalid shapes, dtypes, iteration counts,
@@ -84,10 +90,26 @@ scheduled/recurrent source classes through test-only constructor ports that
 drop the obsolete ls_mode keyword; outputs, gradients, and model state matched
 exactly. There is no compatibility mode argument in production ucmf.
 
-## Deferred unfolded migration
+## Unfolded models
 
-No learned production model, controller, weight strategy, training objective,
-checkpoint format, physical model, or generator is migrated here.
+`ADA-ALFISTA` is migrated as `AdaLFISTASW`, a FISTA subclass with its own
+forward instead of a wrapper ([0004](adr/0004-single-weight-ada-lfista.md)):
+
+- Trainable `B`, `_gamma`, `_theta`; `gamma` / `theta` give the applied values.
+  `lam` and `gamma` are not forward inputs.
+- `measurement_indices` is renamed to `msm_subset`; its index range is no
+  longer checked in forward (no GPU sync). `n_measurements` stays the full size.
+- The wrapper's `A_init` argument is dropped (B always starts as identity).
+- New, without source counterpart: `compile_unrolled` compiles once for
+  staged training (the source did not compile).
+
+`ADA-LFISTA` is migrated as `AdaLFISTA` ([0006](adr/0006-two-matrix-ada-lfista.md)).
+Its weights follow the paper's numbering: `B1` is the recurrence (W1), `B2`
+the measurement branch (W2), i.e. swapped relative to FA2026's `B1` / `B2`.
+
+Still deferred: the compact CMF
+congruence weights (`ADA-CMF-*`, paper suffix `-R`), NA controllers, training
+objectives, checkpoint formats, physical models, and generators.
 
 The source separates iteration logic (`sfista.py`, `alfista.py`, `na_alista.py`)
 from weight strategies (`ada.py`, `congruence.py`, `learned_weight.py`,
