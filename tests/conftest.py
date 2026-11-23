@@ -3,7 +3,7 @@
 # Acoular must be loaded before NumPy (imported via ucmf/torch).
 import acoular  # noqa: F401
 
-from ucmf import FISTA, ISTA
+from ucmf import FISTA, ISTA, AdaLFISTA, AdaLFISTASW
 
 import pytest
 
@@ -26,4 +26,10 @@ class WeightedFISTA(_WeightedForward, FISTA):
 
 @pytest.fixture(params=[WeightedISTA, WeightedFISTA], ids=['weighted-ISTA', 'weighted-FISTA'])
 def weighted_solver_type(request):
+    return request.param
+
+
+@pytest.fixture(scope='module', params=[AdaLFISTASW, AdaLFISTA], ids=['AdaLFISTASW', 'AdaLFISTA'])
+def unfolded_model_type(request):
+    """Every unfolded model; shared properties are tested once for all of them."""
     return request.param

@@ -1,6 +1,5 @@
 """compile_unrolled: one compiled graph reproduces eager solves for every t."""
 
-from ucmf import AdaLFISTASW
 from ucmf.optim import IterationCallback, compile_unrolled
 
 import pytest
@@ -10,13 +9,15 @@ T_MAX = 5
 
 
 @pytest.fixture(scope='module')
-def case():
+def case(unfolded_model_type):
     torch.manual_seed(0)
-    model = AdaLFISTASW(
+    model = unfolded_model_type(
         n_iterations=T_MAX, n_measurements=6, gamma_init=0.3, theta_init=0.01, positive=False,
     ).to(torch.float64)
     with torch.no_grad():
-        model.B.add_(0.1 * torch.randn(6, 6, dtype=torch.float64))
+        for parameter in model.parameters():
+            if parameter.ndim == 2:  # auxiliary weights
+                parameter.add_(0.1 * torch.randn_like(parameter))
     A = torch.randn(6, 4, dtype=torch.float64)
     y = torch.randn(3, 6, dtype=torch.float64)
     return model, A, y, compile_unrolled(model, T_MAX, mode='default')
