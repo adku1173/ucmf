@@ -15,6 +15,7 @@ With ``r_diag=True``, ``hvec*`` restores a zero diagonal before weighting and
 
 from .ista import FISTA
 from .learned_params import LearnedParams
+from .neural_augmentation import NeuralAugmentation
 from .weights import make_propagation_weight_operator, validate_cmf_operator
 
 import torch
@@ -44,7 +45,8 @@ class _ReducedSingleWeight(FISTA):
         y, x0, operator, _ = self._prepare_operator_inputs(y, x0, operator)
         weight_operator = make_propagation_weight_operator(operator, self.Br_re, self.Br_im)
         gradient = self._make_gradient(y, operator, weight_operator)
-        return y, x0, operator.shape[1], gradient, {'A': operator, 'W': weight_operator, 'y': y}
+        residual_gradient = self._make_residual_gradient(y, operator, weight_operator)
+        return y, x0, gradient, residual_gradient, {'A': operator, 'W': weight_operator, 'y': y}
 
 
 class AdaLFISTASWR(LearnedParams, _ReducedSingleWeight):
@@ -57,6 +59,25 @@ class AdaLFISTASWR(LearnedParams, _ReducedSingleWeight):
         num_mics (int): number of microphones in the full array.
         gamma_init (float): initial applied step size for every iteration.
         theta_init (float): initial applied soft-threshold for every iteration.
+        positive (bool): enforce non-negativity via positive shrinkage.
+        callbacks (list | None): optional callbacks; ``A`` and ``W`` are operators.
+        r_diag (bool): whether the CSM diagonal is omitted; must match the operator.
+    """
+
+
+class NA_AdaLFISTASWR(NeuralAugmentation, _ReducedSingleWeight):
+    """NA-Ada-LFISTA-SWR: trainable ``Br_re`` and ``Br_im``; an LSTM predicts ``gamma_k`` and ``theta_k``.
+
+    Same update direction as the learned-parameter variant, but the step size
+    and threshold are predicted per sample and iteration from the residual and
+    direction norms. Any ``t >= 0`` is allowed. Call ``init_normalizers`` once
+    before solving. All arguments are keyword-only.
+
+    Args:
+        num_mics (int): number of microphones in the full array.
+        gamma_init (float): initial applied step size of the controller readout.
+        theta_init (float): initial applied soft-threshold of the controller readout.
+        lstm_dim (int): hidden size of the LSTM controller (default 128).
         positive (bool): enforce non-negativity via positive shrinkage.
         callbacks (list | None): optional callbacks; ``A`` and ``W`` are operators.
         r_diag (bool): whether the CSM diagonal is omitted; must match the operator.

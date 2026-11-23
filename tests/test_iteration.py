@@ -60,7 +60,7 @@ class ScheduledFISTA(FISTA):
     def forward(self, y, x0=None, t=1, operator=None):
         y, x0, operator, _ = self._prepare_operator_inputs(y, x0, operator)
         return self._iterate_accelerated(
-            y, x0, operator.shape[1], t, self._step_params,
+            y, x0, t, self._step_params,
             gradient=self._make_gradient(y, operator, operator),
             callback_metadata={'A': operator, 'W': operator, 'y': y},
         )
@@ -99,10 +99,10 @@ def test_own_recurrent_loop_keeps_graphs_and_resets_local_hidden_state(solver_ty
             super().__init__(positive=False)
             self.gain = torch.nn.Parameter(torch.tensor(0.2, dtype=torch.float64))
 
-        def _iterate(self, y, x0, num_sources, gamma, theta, t, *, gradient, callback_metadata):
+        def _iterate(self, y, x0, gamma, theta, t, *, gradient, callback_metadata):
             shrink_func = self.get_shrink_func()
-            x = self._init_solver_vector(y, x0, num_sources)
-            z = self._init_solver_vector(y, x0, num_sources) if solver_type is FISTA else x
+            x = x0.clone()
+            z = x0.clone() if solver_type is FISTA else x
             tk = 1.0
             hidden = y.new_zeros(y.shape[0], 1)
             cell = y.new_zeros(y.shape[0], 1)

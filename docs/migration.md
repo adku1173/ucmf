@@ -81,7 +81,8 @@ def _make_gradient(self, y, operator, weight_operator):
 ```
 
 Pass `gradient=` and `callback_metadata=` separately to the iteration hooks;
-pass the source count instead of a matrix or operator for initialization.
+`_prepare_operator_inputs` turns a missing x0 into zeros, so the iteration
+hooks take no matrix, operator, or source count for initialization.
 `_on_iteration_end` takes the callback metadata as keyword arguments. The
 [architecture guide](architecture.md#subclasses-own-weighted-forward-inputs)
 shows a complete weighted-forward example. Non-default W is an unfolded

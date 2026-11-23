@@ -46,13 +46,13 @@ class LearnedParams:
         coordinates of the auxiliary weights. Row indices must be in range.
         """
         validate_unfolded_iterations(t, self.num_iterations)
-        y, x0, num_sources, gradient, callback_metadata = self._prepare_update(y, x0, operator)
+        y, x0, gradient, _, callback_metadata = self._prepare_update(y, x0, operator)
         # gamma = softplus(_gamma), theta = softplus(_theta): applied once here,
         # then unbound into per-layer scalars so the loop only does tuple indexing
         # (no per-layer tensor __getitem__ dispatch). unbind keeps the autograd graph.
         gammas, thetas = self.gamma.unbind(), self.theta.unbind()
         return self._iterate_accelerated(
-            y, x0, num_sources, t,
+            y, x0, t,
             step_params_fn=lambda k: (gammas[k], thetas[k]),
             gradient=gradient,
             callback_metadata=callback_metadata,

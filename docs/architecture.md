@@ -73,9 +73,9 @@ For example, an already-prepared learned subclass can implement:
 def _step_params(self, k):
     return self.gammas[k], self.thetas[k]
 
-def _iterate(self, y, x0, num_sources, gamma, theta, t, *, gradient, callback_metadata):
+def _iterate(self, y, x0, gamma, theta, t, *, gradient, callback_metadata):
     return self._iterate_accelerated(
-        y, x0, num_sources, t, self._step_params,
+        y, x0, t, self._step_params,
         gradient=gradient, callback_metadata=callback_metadata,
     )
 ```
@@ -88,8 +88,8 @@ threshold, return `lam * gamma_k`; directly learned theta is a different policy.
 
 A neurally augmented model can override forward or `_iterate`, initialize
 hidden/cell tensors locally, and predict gamma/theta inside a normal for-loop.
-Reuse the prepared `gradient(x)`, `get_shrink_func`, `_init_solver_vector`,
-and the callback helpers. An accelerated version
+Reuse the prepared `gradient(x)`, `get_shrink_func`, the prepared warm start `x0`
+(always a tensor; copy it with `x0.clone()`), and the callback helpers. An accelerated version
 can reuse `_nesterov_momentum` with local x, z, tk; it returns `(tk, z)`
 and the caller assigns `x = x_next`.
 
@@ -111,7 +111,7 @@ effective weight as a `LinearOperator` from its own parameters, e.g. with
 y, x0, operator, _ = self._prepare_operator_inputs(y, x0, operator)
 weight_operator = make_weight_operator(operator, self.B)
 return self._iterate_accelerated(
-    y, x0, operator.shape[1], t, step_params_fn,
+    y, x0, t, step_params_fn,
     gradient=self._make_gradient(y, operator, weight_operator),
     callback_metadata={'A': operator, 'W': weight_operator, 'y': y},
 )

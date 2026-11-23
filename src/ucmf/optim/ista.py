@@ -81,6 +81,16 @@ class ISTA(nn.Module):
 
         return gradient
 
+    def _make_residual_gradient(self, y, operator, weight_operator):
+        """Like ``_make_gradient``, but also return the residual ``y - A x`` the direction uses."""
+        m = float(y.shape[1])
+
+        def residual_gradient(x):
+            residual = y - operator.forward(x)
+            return residual, weight_operator.adjoint(residual) / m
+
+        return residual_gradient
+
     def get_shrink_func(self):
         """Get shrinkage function based on positivity."""
         if self.positive:
@@ -105,7 +115,11 @@ class ISTA(nn.Module):
         return y, x0
 
     def _prepare_operator_inputs(self, y, x0, operator):
-        """Check operator metadata against the prepared vectors and detach its data."""
+        """Check operator metadata against the prepared vectors and detach its data.
+
+        A missing warm start becomes zeros of shape ``(B, n)``, so the returned
+        ``x0`` is always a tensor.
+        """
         y, x0 = self._prepare_vectors(y, x0)
         if not isinstance(operator, LinearOperator):
             raise ValueError('operator must be a LinearOperator; wrap dense matrices in MatrixMult.')
@@ -120,7 +134,9 @@ class ISTA(nn.Module):
         if y.shape[1] != m or operator.batch_size not in (None, batch_size):
             msg = f'y has shape {tuple(y.shape)} but operator has shape {(m, n)} and batch size {operator.batch_size}.'
             raise ValueError(msg)
-        if x0 is not None and x0.shape != (batch_size, n):
+        if x0 is None:
+            x0 = y.new_zeros((batch_size, n))
+        elif x0.shape != (batch_size, n):
             raise ValueError(f'x0 has shape {tuple(x0.shape)} but expected {(batch_size, n)}')
         return y, x0, operator.detached(), batch_size
 
@@ -166,14 +182,10 @@ class ISTA(nn.Module):
             cb.on_step_end(self, x, gamma=gamma, theta=theta, **callback_metadata)
         return not self.stop
 
-    def _init_solver_vector(self, y, x0, num_sources):
-        """Initialize one solution-shaped vector."""
-        return y.new_zeros((y.shape[0], num_sources)) if x0 is None else x0.clone()
-
-    def _iterate(self, y, x0, num_sources, gamma, theta, t, *, gradient, callback_metadata):
+    def _iterate(self, y, x0, gamma, theta, t, *, gradient, callback_metadata):
         """Run fixed-step ISTA with the solution local to this solve."""
         shrink_func = self.get_shrink_func()
-        x = self._init_solver_vector(y, x0, num_sources)
+        x = x0.clone()
 
         self._start_iterations(y)
         for k in range(t):
@@ -214,7 +226,7 @@ class ISTA(nn.Module):
         lam_value = self._resolve_lam_value(lam, batch_size, operator)
         gamma_value, theta_value = self._resolve_gamma_theta(lam_value, gamma, batch_size, operator)
         return self._iterate(
-            y, x0, operator.shape[1], gamma_value, theta_value, t,
+            y, x0, gamma_value, theta_value, t,
             gradient=self._make_gradient(y, operator, operator),
             callback_metadata={'A': operator, 'W': operator, 'y': y},
         )
@@ -236,11 +248,12 @@ class FISTA(ISTA):
         z_next = x_next + (tk - 1.0) / t_next * (x_next - x)
         return t_next, z_next
 
-    def _iterate_accelerated(self, y, x0, num_sources, t, step_params_fn, *, gradient, callback_metadata):
+    def _iterate_accelerated(self, y, x0, t, step_params_fn, *, gradient, callback_metadata):
         """Run FISTA with local momentum and caller-provided step parameters."""
         shrink_func = self.get_shrink_func()
-        x = self._init_solver_vector(y, x0, num_sources)
-        z = self._init_solver_vector(y, x0, num_sources)
+        # Separate copies: begin callbacks may modify x in place, and the output must not alias x0.
+        x = x0.clone()
+        z = x0.clone()
         tk = 1.0
 
         self._start_iterations(y)
@@ -255,10 +268,10 @@ class FISTA(ISTA):
                 break
         return x
 
-    def _iterate(self, y, x0, num_sources, gamma, theta, t, *, gradient, callback_metadata):
+    def _iterate(self, y, x0, gamma, theta, t, *, gradient, callback_metadata):
         """Run FISTA iterations with Nesterov momentum and return the solution."""
         return self._iterate_accelerated(
-            y, x0, num_sources, t,
+            y, x0, t,
             step_params_fn=lambda _k: (gamma, theta),
             gradient=gradient,
             callback_metadata=callback_metadata,

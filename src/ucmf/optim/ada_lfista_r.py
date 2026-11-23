@@ -2,6 +2,7 @@
 
 from .ista import FISTA
 from .learned_params import LearnedParams
+from .neural_augmentation import NeuralAugmentation
 from .weights import make_propagation_weight_operator, validate_cmf_operator
 
 import torch
@@ -38,8 +39,12 @@ class _ReducedTwoWeights(FISTA):
             feedback = recurrent_operator.adjoint(recurrent_operator.forward(x))
             return (measurement_term - feedback) / m
 
+        def residual_gradient(x):
+            # The residual is only needed as a controller feature: one extra forward per call.
+            return y - operator.forward(x), gradient(x)
+
         callback_metadata = {'A': operator, 'W': weight_operator, 'W_recurrent': recurrent_operator, 'y': y}
-        return y, x0, operator.shape[1], gradient, callback_metadata
+        return y, x0, gradient, residual_gradient, callback_metadata
 
 
 class AdaLFISTAR(LearnedParams, _ReducedTwoWeights):
@@ -53,4 +58,24 @@ class AdaLFISTAR(LearnedParams, _ReducedTwoWeights):
     operator. With a removed diagonal, both weights act on zero-diagonal CSMs
     and keep only the off-diagonal output. End callbacks get operators ``A``,
     ``W = M`` and ``W_recurrent = R``.
+    """
+
+
+class NA_AdaLFISTAR(NeuralAugmentation, _ReducedTwoWeights):
+    """NA-Ada-LFISTA-R: trainable ``Br1_*`` and ``Br2_*``; an LSTM predicts ``gamma_k`` and ``theta_k``.
+
+    Same update direction as the learned-parameter variant, but the step size
+    and threshold are predicted per sample and iteration from the residual and
+    direction norms. Any ``t >= 0`` is allowed. Call ``init_normalizers`` once
+    before solving. All arguments are keyword-only.
+
+    Args:
+        num_mics (int): number of microphones in the full array.
+        gamma_init (float): initial applied step size of the controller readout.
+        theta_init (float): initial applied soft-threshold of the controller readout.
+        lstm_dim (int): hidden size of the LSTM controller (default 128).
+        positive (bool): enforce non-negativity via positive shrinkage.
+        callbacks (list | None): optional callbacks; end callbacks get
+            ``A``, ``W = M`` and ``W_recurrent = R``.
+        r_diag (bool): whether the CSM diagonal is omitted; must match the operator.
     """

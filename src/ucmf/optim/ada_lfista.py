@@ -15,6 +15,7 @@ unconstrained ``_gamma`` / ``_theta``; ``lam`` and ``gamma`` are no inputs.
 
 from .ista import FISTA
 from .learned_params import LearnedParams
+from .neural_augmentation import NeuralAugmentation
 from .weights import make_weight_operator
 
 import torch
@@ -57,8 +58,12 @@ class _TwoWeights(FISTA):
             feedback = recurrent_operator.adjoint(recurrent_operator.forward(x))
             return (measurement_term - feedback) / m
 
+        def residual_gradient(x):
+            # The residual is only needed as a controller feature: one extra forward per call.
+            return y - operator.forward(x), gradient(x)
+
         callback_metadata = {'A': operator, 'W': weight_operator, 'W_recurrent': recurrent_operator, 'y': y}
-        return y, x0, operator.shape[1], gradient, callback_metadata
+        return y, x0, gradient, residual_gradient, callback_metadata
 
 
 class AdaLFISTA(LearnedParams, _TwoWeights):
@@ -78,4 +83,25 @@ class AdaLFISTA(LearnedParams, _TwoWeights):
         weight_mode (str): ``'factored'`` leaves ``R`` as a composition.
             ``'precomputed'`` forms ``R`` once per solve and requires a dense
             measurement operator. ``M`` stays factored in either mode.
+    """
+
+
+class NA_AdaLFISTA(NeuralAugmentation, _TwoWeights):
+    """NA-Ada-LFISTA: trainable ``B1`` and ``B2``; an LSTM predicts ``gamma_k`` and ``theta_k``.
+
+    Same update direction as the learned-parameter variant, but the step size
+    and threshold are predicted per sample and iteration from the residual and
+    direction norms. Any ``t >= 0`` is allowed. Call ``init_normalizers`` once
+    before solving. All arguments are keyword-only.
+
+    Args:
+        num_measurements (int): full measurement dimension ``m`` spanned by ``B1``/``B2``.
+        gamma_init (float): initial applied step size of the controller readout.
+        theta_init (float): initial applied soft-threshold of the controller readout.
+        lstm_dim (int): hidden size of the LSTM controller (default 128).
+        positive (bool): enforce non-negativity via positive shrinkage.
+        callbacks (list | None): optional solver callbacks; end callbacks get
+            ``A``, ``W = M`` and ``W_recurrent = R``.
+        B1, B2 (Tensor | None): optional ``(m, m)`` inits; default identity.
+        weight_mode (str): ``'factored'`` or ``'precomputed'``, as for ``AdaLFISTA``.
     """

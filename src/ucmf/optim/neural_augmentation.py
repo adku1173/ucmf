@@ -77,8 +77,8 @@ class NeuralAugmentation:
         Uses the batch mean and population standard deviation of the features
         at ``z = x0`` (zeros if omitted), as FA2026 did lazily for its first batch.
         """
-        y, x0, num_sources, _, residual_gradient, _ = self._prepare_update(y, x0, operator)
-        features = self.controller.features(*residual_gradient(self._init_solver_vector(y, x0, num_sources)))
+        y, x0, _, residual_gradient, _ = self._prepare_update(y, x0, operator)
+        features = self.controller.features(*residual_gradient(x0))
         self.controller.feature_mean.copy_(features.mean(dim=0))
         self.controller.feature_std.copy_(features.std(dim=0, unbiased=False))
 
@@ -86,10 +86,10 @@ class NeuralAugmentation:
         """Run ``t`` accelerated iterations with controller-predicted step parameters."""
         if t < 0:
             raise ValueError('t must be non-negative.')
-        y, x0, num_sources, _, residual_gradient, callback_metadata = self._prepare_update(y, x0, operator)
+        y, x0, _, residual_gradient, callback_metadata = self._prepare_update(y, x0, operator)
         shrink_func = self.get_shrink_func()
-        x = self._init_solver_vector(y, x0, num_sources)
-        z = self._init_solver_vector(y, x0, num_sources)
+        x = x0.clone()
+        z = x0.clone()
         tk = 1.0
         hidden, cell = self.controller.initial_state(y.shape[0])
 
