@@ -14,16 +14,57 @@ unconstrained ``_gamma`` / ``_theta``; ``lam`` and ``gamma`` are no inputs.
 """
 
 from .ista import FISTA
-from .utils import softplus_inverse, validate_unfolded_iterations
+from .learned_params import LearnedParams
 from .weights import make_weight_operator
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 
 
-class AdaLFISTA(FISTA):
+class _TwoWeights(FISTA):
+    """Update direction ``(M.T @ y - R.T @ (R @ z)) / m`` with ``R = B1 @ A``, ``M = B2 @ A``."""
+
+    def __init__(
+        self, *, n_measurements, positive=True, callbacks=None, B1=None, B2=None, weight_mode='factored',
+    ):
+        super().__init__(positive=positive, callbacks=callbacks)
+        if weight_mode not in ('factored', 'precomputed'):
+            raise ValueError("weight_mode must be 'factored' or 'precomputed'.")
+        self.weight_mode = weight_mode
+        self.n_measurements = int(n_measurements)
+        if self.n_measurements <= 0:
+            raise ValueError(f'n_measurements must be positive, got {n_measurements}')
+        self.B1 = nn.Parameter(self._initial_weight(B1, 'B1'))
+        self.B2 = nn.Parameter(self._initial_weight(B2, 'B2'))
+
+    def _initial_weight(self, B, name):
+        B_tensor = torch.eye(self.n_measurements) if B is None else B.detach().clone()
+        expected_shape = (self.n_measurements, self.n_measurements)
+        if B_tensor.ndim != 2 or tuple(B_tensor.shape) != expected_shape:
+            raise ValueError(f'{name} must have shape {expected_shape}, got {tuple(B_tensor.shape)}.')
+        return B_tensor
+
+    def _prepare_update(self, y, x0, operator):
+        """Detach the operator and bind the two-matrix update direction for one solve."""
+        y, x0, operator, _ = self._prepare_operator_inputs(y, x0, operator)
+        recurrent_operator = make_weight_operator(operator, self.B1, self.weight_mode)
+        weight_operator = make_weight_operator(operator, self.B2)
+        # M.T @ y does not depend on the iteration; no need to form M.
+        measurement_term = weight_operator.adjoint(y)
+        m = float(y.shape[1])
+
+        def gradient(x):
+            feedback = recurrent_operator.adjoint(recurrent_operator.forward(x))
+            return (measurement_term - feedback) / m
+
+        callback_metadata = {'A': operator, 'W': weight_operator, 'W_recurrent': recurrent_operator, 'y': y}
+        return y, x0, operator.shape[1], gradient, callback_metadata
+
+
+class AdaLFISTA(LearnedParams, _TwoWeights):
     """Two-matrix Ada-LFISTA with trainable ``B1``, ``B2``, ``gamma`` and ``theta``.
+
+    All arguments are keyword-only.
 
     Args:
         n_iterations (int): number of unfolded iterations/layers.
@@ -38,75 +79,3 @@ class AdaLFISTA(FISTA):
             ``'precomputed'`` forms ``R`` once per solve and requires a dense
             measurement operator. ``M`` stays factored in either mode.
     """
-
-    def __init__(
-        self,
-        n_iterations,
-        n_measurements,
-        gamma_init,
-        theta_init,
-        positive=True,
-        callbacks=None,
-        B1=None,
-        B2=None,
-        *,
-        weight_mode='factored',
-    ):
-        super().__init__(positive=positive, callbacks=callbacks)
-        if weight_mode not in ('factored', 'precomputed'):
-            raise ValueError("weight_mode must be 'factored' or 'precomputed'.")
-        self.weight_mode = weight_mode
-        if n_iterations <= 0:
-            raise ValueError(f'n_iterations must be positive, got {n_iterations}')
-        self.n_iterations = n_iterations
-        self.n_measurements = int(n_measurements)
-        if self.n_measurements <= 0:
-            raise ValueError(f'n_measurements must be positive, got {n_measurements}')
-        self.B1 = nn.Parameter(self._initial_weight(B1, 'B1'))
-        self.B2 = nn.Parameter(self._initial_weight(B2, 'B2'))
-        self._gamma = nn.Parameter(torch.full((n_iterations,), float(softplus_inverse(gamma_init))))
-        self._theta = nn.Parameter(torch.full((n_iterations,), float(softplus_inverse(theta_init))))
-
-    def _initial_weight(self, B, name):
-        B_tensor = torch.eye(self.n_measurements) if B is None else B.detach().clone()
-        expected_shape = (self.n_measurements, self.n_measurements)
-        if B_tensor.ndim != 2 or tuple(B_tensor.shape) != expected_shape:
-            raise ValueError(f'{name} must have shape {expected_shape}, got {tuple(B_tensor.shape)}.')
-        return B_tensor
-
-    @property
-    def gamma(self):
-        """Per-iteration step sizes actually applied (``softplus(_gamma)``)."""
-        return F.softplus(self._gamma)
-
-    @property
-    def theta(self):
-        """Per-iteration soft-thresholds actually applied (``softplus(_theta)``)."""
-        return F.softplus(self._theta)
-
-    def forward(self, y, x0=None, t=1, operator=None):
-        """Run two-matrix Ada-LFISTA with a fixed operator and learned weights.
-
-        Inputs and model parameters must already share ``y``'s dtype and device.
-        For a subset, ``y`` must follow ``operator.rows`` in the full measurement
-        coordinates of both weights. Row indices must be in range.
-        """
-        validate_unfolded_iterations(t, self.n_iterations)
-        y, x0, operator, _ = self._prepare_operator_inputs(y, x0, operator)
-        recurrent_operator = make_weight_operator(operator, self.B1, self.weight_mode)
-        weight_operator = make_weight_operator(operator, self.B2)
-        # M.T @ y does not depend on the iteration; no need to form M.
-        measurement_term = weight_operator.adjoint(y)
-        m = float(y.shape[1])
-
-        def gradient(x):
-            feedback = recurrent_operator.adjoint(recurrent_operator.forward(x))
-            return (measurement_term - feedback) / m
-
-        gammas, thetas = self.gamma.unbind(), self.theta.unbind()
-        return self._iterate_accelerated(
-            y, x0, operator.shape[1], t,
-            step_params_fn=lambda k: (gammas[k], thetas[k]),
-            gradient=gradient,
-            callback_metadata={'A': operator, 'W': weight_operator, 'W_recurrent': recurrent_operator, 'y': y},
-        )

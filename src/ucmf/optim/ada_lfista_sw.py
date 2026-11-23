@@ -17,16 +17,43 @@ with Nesterov momentum. Neither ``lam`` nor ``gamma`` are passed to
 """
 
 from .ista import FISTA
-from .utils import softplus_inverse, validate_unfolded_iterations
+from .learned_params import LearnedParams
 from .weights import make_weight_operator
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 
 
-class AdaLFISTASW(FISTA):
+class _SingleWeight(FISTA):
+    """Update direction ``W.T @ (y - A z) / m`` with ``W = B_active @ A``."""
+
+    def __init__(self, *, n_measurements, positive=True, callbacks=None, B=None, weight_mode='factored'):
+        super().__init__(positive=positive, callbacks=callbacks)
+        if weight_mode not in ('factored', 'precomputed'):
+            raise ValueError("weight_mode must be 'factored' or 'precomputed'.")
+        self.weight_mode = weight_mode
+        self.n_measurements = int(n_measurements)
+        if self.n_measurements <= 0:
+            raise ValueError(f'n_measurements must be positive, got {n_measurements}')
+
+        B_tensor = torch.eye(self.n_measurements) if B is None else B.detach().clone()
+        expected_shape = (self.n_measurements, self.n_measurements)
+        if B_tensor.ndim != 2 or tuple(B_tensor.shape) != expected_shape:
+            raise ValueError(f'B must have shape {expected_shape}, got {tuple(B_tensor.shape)}.')
+        self.B = nn.Parameter(B_tensor)
+
+    def _prepare_update(self, y, x0, operator):
+        """Detach the operator and bind the weighted update direction for one solve."""
+        y, x0, operator, _ = self._prepare_operator_inputs(y, x0, operator)
+        weight_operator = make_weight_operator(operator, self.B, self.weight_mode)
+        gradient = self._make_gradient(y, operator, weight_operator)
+        return y, x0, operator.shape[1], gradient, {'A': operator, 'W': weight_operator, 'y': y}
+
+
+class AdaLFISTASW(LearnedParams, _SingleWeight):
     """Single-weight Ada-LFISTA with trainable ``B``, ``gamma`` and ``theta``.
+
+    All arguments are keyword-only.
 
     Args:
         n_iterations (int): number of unfolded iterations/layers.
@@ -41,66 +68,3 @@ class AdaLFISTASW(FISTA):
             forming ``W``. ``'precomputed'`` forms ``W = B @ A`` once per solve
             and requires a dense ``MatrixMult`` or ``CMFDictionary`` operator.
     """
-
-    def __init__(
-        self,
-        n_iterations,
-        n_measurements,
-        gamma_init,
-        theta_init,
-        positive=True,
-        callbacks=None,
-        B=None,
-        *,
-        weight_mode='factored',
-    ):
-        super().__init__(positive=positive, callbacks=callbacks)
-        if weight_mode not in ('factored', 'precomputed'):
-            raise ValueError("weight_mode must be 'factored' or 'precomputed'.")
-        self.weight_mode = weight_mode
-        if n_iterations <= 0:
-            raise ValueError(f'n_iterations must be positive, got {n_iterations}')
-        self.n_iterations = n_iterations
-        self.n_measurements = int(n_measurements)
-        if self.n_measurements <= 0:
-            raise ValueError(f'n_measurements must be positive, got {n_measurements}')
-
-        B_tensor = torch.eye(self.n_measurements) if B is None else B.detach().clone()
-        expected_shape = (self.n_measurements, self.n_measurements)
-        if B_tensor.ndim != 2 or tuple(B_tensor.shape) != expected_shape:
-            raise ValueError(f'B must have shape {expected_shape}, got {tuple(B_tensor.shape)}.')
-        self.B = nn.Parameter(B_tensor)
-
-        self._gamma = nn.Parameter(torch.full((n_iterations,), float(softplus_inverse(gamma_init))))
-        self._theta = nn.Parameter(torch.full((n_iterations,), float(softplus_inverse(theta_init))))
-
-    @property
-    def gamma(self):
-        """Per-iteration step sizes actually applied (``softplus(_gamma)``)."""
-        return F.softplus(self._gamma)
-
-    @property
-    def theta(self):
-        """Per-iteration soft-thresholds actually applied (``softplus(_theta)``)."""
-        return F.softplus(self._theta)
-
-    def forward(self, y, x0=None, t=1, operator=None):
-        """Run Ada-LFISTA-SW with a fixed measurement operator and learned weights.
-
-        Inputs and model parameters must already share ``y``'s dtype and device.
-        For a subset, ``y`` must follow ``operator.rows`` in the full measurement
-        coordinates of ``B``. Row indices must be in range.
-        """
-        validate_unfolded_iterations(t, self.n_iterations)
-        y, x0, operator, _ = self._prepare_operator_inputs(y, x0, operator)
-        weight_operator = make_weight_operator(operator, self.B, self.weight_mode)
-        # gamma = softplus(_gamma), theta = softplus(_theta): applied once here,
-        # then unbound into per-layer scalars so the loop only does tuple indexing
-        # (no per-layer tensor __getitem__ dispatch). unbind keeps the autograd graph.
-        gammas, thetas = self.gamma.unbind(), self.theta.unbind()
-        return self._iterate_accelerated(
-            y, x0, operator.shape[1], t,
-            step_params_fn=lambda k: (gammas[k], thetas[k]),
-            gradient=self._make_gradient(y, operator, weight_operator),
-            callback_metadata={'A': operator, 'W': weight_operator, 'y': y},
-        )

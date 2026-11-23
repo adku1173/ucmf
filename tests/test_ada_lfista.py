@@ -12,7 +12,10 @@ M_FULL, N, T = 6, 4, 4
 
 def make_model(*, n_measurements=M_FULL, weight_mode='factored'):
     torch.manual_seed(0)
-    model = AdaLFISTA(T, n_measurements, 0.3, 0.01, positive=False, weight_mode=weight_mode)
+    model = AdaLFISTA(
+        n_iterations=T, n_measurements=n_measurements, gamma_init=0.3, theta_init=0.01,
+        positive=False, weight_mode=weight_mode,
+    )
     model = model.double()
     with torch.no_grad():
         model.B1.add_(0.2 * torch.randn_like(model.B1))

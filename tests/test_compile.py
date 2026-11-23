@@ -34,7 +34,7 @@ def test_compiled_model_matches_eager_with_changing_mic_subsets(make_model, dens
 
 
 def test_returns_all_iterates_and_restores_callbacks():
-    model = AdaLFISTASW(T, 6, 0.3, 0.01).double()
+    model = AdaLFISTASW(n_iterations=T, n_measurements=6, gamma_init=0.3, theta_init=0.01).double()
     compiled = compile_unrolled(model, T, mode='default')
     seen = []
 
@@ -51,7 +51,7 @@ def test_returns_all_iterates_and_restores_callbacks():
 
 
 def test_restores_callbacks_when_solve_raises():
-    model = AdaLFISTASW(T, 6, 0.3, 0.01)
+    model = AdaLFISTASW(n_iterations=T, n_measurements=6, gamma_init=0.3, theta_init=0.01)
     model.callbacks = own = [IterationCallback()]
     compiled = compile_unrolled(model, T, mode='default')
     operator = MatrixMult(torch.ones(6, 4))
