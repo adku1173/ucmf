@@ -1,5 +1,5 @@
 """Sparse solvers for unfolded covariance matrix fitting."""
 
-from .optim import FISTA, ISTA, AdaLFISTA, AdaLFISTASW
+from .optim import FISTA, ISTA, AdaLFISTA, AdaLFISTASW, AdaLFISTASWR
 
-__all__ = ['AdaLFISTA', 'AdaLFISTASW', 'FISTA', 'ISTA']
+__all__ = ['AdaLFISTA', 'AdaLFISTASW', 'AdaLFISTASWR', 'FISTA', 'ISTA']

@@ -2,6 +2,7 @@
 
 from .ada_lfista import AdaLFISTA
 from .ada_lfista_sw import AdaLFISTASW
+from .ada_lfista_swr import AdaLFISTASWR
 from .callbacks import (
     IntermediateOutputCollector,
     IterationCallback,
@@ -15,6 +16,7 @@ from .preprocessing import normalize_sensing_matrix_columns
 __all__ = [
     'AdaLFISTA',
     'AdaLFISTASW',
+    'AdaLFISTASWR',
     'FISTA',
     'ISTA',
     'IntermediateOutputCollector',
