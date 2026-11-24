@@ -15,6 +15,10 @@ dependencies = [
     "torch>=2.2",
 ]
 
+[project.optional-dependencies]
+# Training (ucmf.train) needs Ray Tune; the core package stays Ray-free.
+train = ["ray[tune]>=2.60"]
+
 [dependency-groups]
 examples = ["acoular", "matplotlib", "pylops", "threadpoolctl"]
 dev = [

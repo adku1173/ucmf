@@ -90,7 +90,7 @@ class NeuralAugmentation:
         """Set the feature normalization from the first-iteration features of a batch.
 
         Uses the batch mean and population standard deviation of the features
-        at ``z = x0``, as FA2026 did lazily for its first batch.
+        at ``z = x0``.
 
         Parameters
         ----------
