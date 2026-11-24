@@ -43,6 +43,8 @@ select = ["E", "F", "I", "B"]
 # Acoular must be imported before NumPy (numba/OpenBLAS threading), as in Acoular itself.
 [tool.ruff.lint.isort]
 section-order = ["future", "standard-library", "acoular", "first-party", "local-folder", "third-party"]
+# Test-only modules, importable because pytest puts tests/ on sys.path.
+known-local-folder = ["cases", "helpers"]
 
 [tool.ruff.lint.isort.sections]
 acoular = ["acoular"]

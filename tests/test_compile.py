@@ -4,14 +4,15 @@ from ucmf import AdaLFISTASW
 from ucmf.optim import IterationCallback, compile_unrolled
 from ucmf.optim.operator import CMFPropagation, MatrixMult
 
-import pytest
-import torch
 from cases.models import ModelCases, T, build_model, perturb_weights
 from cases.problems import NUM_MICS, NUM_SOURCES
+
+import pytest
+import torch
 from pytest_cases import parametrize_with_cases
 
 
-@parametrize_with_cases('spec', cases=ModelCases, has_tag='learned')
+@parametrize_with_cases('spec', cases=ModelCases, has_tag='unfolded')
 def test_compiled_model_matches_eager_with_changing_mic_subsets(spec):
     """Training scenario: per-problem microphone subsets and propagation matrices change per batch."""
     rng = torch.Generator().manual_seed(8)

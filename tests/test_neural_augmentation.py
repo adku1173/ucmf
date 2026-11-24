@@ -3,10 +3,11 @@
 from ucmf.optim import StepParamCollector
 from ucmf.optim.neural_augmentation import _StepParamLSTM
 
-import pytest
-import torch
 from cases.models import ModelCases, T, build_model, dense_matrix, perturb_weights
 from cases.problems import BATCH, NUM_MICS, cmf_problem
+
+import pytest
+import torch
 from pytest_cases import parametrize_with_cases
 
 SPEC = 'spec'

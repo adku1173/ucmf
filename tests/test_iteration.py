@@ -4,9 +4,10 @@ from ucmf import FISTA, ISTA
 from ucmf.optim import IntermediateOutputCollector
 from ucmf.optim.operator import MatrixMult
 
+from helpers import StopAt, reference_iterates, scheduled_step_params
+
 import pytest
 import torch
-from helpers import StopAt, reference_iterates, scheduled_step_params
 
 
 def scheduled_reference(A, y, x0, gammas, thetas, *, accelerated):

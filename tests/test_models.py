@@ -4,12 +4,13 @@ from ucmf import FISTA
 from ucmf.optim import IntermediateOutputCollector, IterationCallback
 from ucmf.optim.operator import CMFPropagation, MatrixMult
 
-import pytest
-import torch
-import torch.nn.functional as F
 from cases.models import ModelCases, T, build_model, dense_matrix, perturb_weights, set_constant_step_params
 from cases.problems import NUM_MICS, NUM_SOURCES, ProblemCases, cmf_problem
 from helpers import MustNotRun, StopAt, assert_operator_matches, operator_source, r_diag_of, reference_iterates
+
+import pytest
+import torch
+import torch.nn.functional as F
 from pytest_cases import parametrize_with_cases
 
 SPEC = 'spec'

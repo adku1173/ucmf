@@ -8,15 +8,16 @@ coordinates), ``weight_mode`` (factored/precomputed), ``two_weights``
 
 from dataclasses import make_dataclass
 
-from cases.problems import NUM_MICS
 from ucmf import FISTA, ISTA, AdaLFISTA, AdaLFISTASW, NA_AdaLFISTA, NA_AdaLFISTASW
 from ucmf.optim import AdaLFISTAR, AdaLFISTASWR, NA_AdaLFISTAR, NA_AdaLFISTASWR
 from ucmf.optim.neural_augmentation import NeuralAugmentation
 from ucmf.optim.operator import CMFDictionary, CMFPropagation, HermitianVectorization
 from ucmf.optim.utils import softplus_inverse
 
-import torch
+from cases.problems import NUM_MICS
 from helpers import model_step_params
+
+import torch
 from pytest_cases import case
 
 T = 4

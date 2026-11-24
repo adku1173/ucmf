@@ -11,13 +11,14 @@ from ucmf.optim.operator import (
 )
 from ucmf.optim.utils import default_gamma_from_A, default_gamma_from_operator
 
-import numpy as np
-import pytest
-import torch
 from cases.models import ModelCases, build_model
 from cases.operators import BATCH_SIZE, OperatorCases, cmf_matrix
 from cases.problems import NUM_MICS
 from helpers import assert_operator_matches
+
+import numpy as np
+import pytest
+import torch
 from pytest_cases import parametrize_with_cases
 
 C = 4

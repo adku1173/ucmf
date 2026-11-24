@@ -3,10 +3,11 @@
 from ucmf import FISTA, ISTA
 from ucmf.optim.operator import MatrixMult
 
+from helpers import MustNotRun
+
 import numpy as np
 import pytest
 import torch
-from helpers import MustNotRun
 
 
 @pytest.mark.parametrize('solver_type', [ISTA, FISTA])

@@ -3,8 +3,9 @@
 # Acoular must be loaded before NumPy (imported via ucmf/torch).
 import acoular  # noqa: F401
 
-import pytest
 from helpers import Recorder
+
+import pytest
 
 
 @pytest.fixture
