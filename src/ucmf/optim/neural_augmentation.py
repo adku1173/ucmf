@@ -45,7 +45,10 @@ class _StepParamLSTM(nn.Module):
         return self.hidden_init.expand(batch_size, -1), self.cell_init.expand(batch_size, -1)
 
     def forward(self, residual, direction, hidden, cell):
-        """Advance the LSTM one iteration; return ``gamma``, ``theta`` (each ``(B, 1)``), ``hidden``, ``cell``."""
+        """Advance the LSTM by one iteration.
+
+        Returns ``gamma`` and ``theta`` of shape ``(B, 1)`` and the new ``hidden`` and ``cell``.
+        """
         features = (self.features(residual, direction) - self.feature_mean) / self.feature_std.clamp_min(1e-6)
         hidden, cell = self.lstm(features, (hidden, cell))
         params = F.softplus(self.linear(torch.relu(self.lll(cell))))
@@ -53,17 +56,29 @@ class _StepParamLSTM(nn.Module):
 
 
 class NeuralAugmentation:
-    """Mixin predicting ``gamma_k`` and ``theta_k`` with an LSTM instead of learning them per layer.
+    """Mixin predicting the step size and threshold of every iteration with an LSTM.
 
     Combine with a weight base whose ``_prepare_update`` provides
     ``residual_gradient(z) -> (y - A z, direction)``. The controller is not tied
-    to a fixed depth, so any ``t >= 0`` is allowed. Call ``init_normalizers``
-    once before solving; until then the outputs are NaN.
+    to a fixed depth, so any ``t >= 0`` is allowed. Call :meth:`init_normalizers`
+    once before solving; until then the outputs are NaN. All arguments are
+    keyword-only.
 
-    Args:
-        gamma_init (float): initial applied step size of the readout.
-        theta_init (float): initial applied soft-threshold of the readout.
-        lstm_dim (int): hidden size of the LSTM.
+    Parameters
+    ----------
+    gamma_init : float
+        Initial applied step size of the readout.
+    theta_init : float
+        Initial applied soft-threshold of the readout.
+    lstm_dim : int, optional
+        Hidden size of the LSTM (default 128).
+    **kwargs
+        Arguments of the weight base.
+
+    Attributes
+    ----------
+    controller : torch.nn.Module
+        LSTM, readout, learned initial states, and the feature normalization buffers.
     """
 
     def __init__(self, *, gamma_init, theta_init, lstm_dim=128, **kwargs):
@@ -75,7 +90,16 @@ class NeuralAugmentation:
         """Set the feature normalization from the first-iteration features of a batch.
 
         Uses the batch mean and population standard deviation of the features
-        at ``z = x0`` (zeros if omitted), as FA2026 did lazily for its first batch.
+        at ``z = x0``, as FA2026 did lazily for its first batch.
+
+        Parameters
+        ----------
+        y : Tensor
+            Measurements of shape ``(B, m)`` or ``(m,)``.
+        operator : LinearOperator
+            Measurement operator.
+        x0 : Tensor, optional
+            Point of the first iteration, shape ``(B, n)`` or ``(n,)``; zeros if omitted.
         """
         y, x0, _, residual_gradient, _ = self._prepare_update(y, x0, operator)
         features = self.controller.features(*residual_gradient(x0))
@@ -83,7 +107,24 @@ class NeuralAugmentation:
         self.controller.feature_std.copy_(features.std(dim=0, unbiased=False))
 
     def forward(self, y, x0=None, t=1, operator=None):
-        """Run ``t`` accelerated iterations with controller-predicted step parameters."""
+        """Run ``t`` accelerated iterations with controller-predicted step parameters.
+
+        Parameters
+        ----------
+        y : Tensor
+            Measurements of shape ``(B, m)`` or ``(m,)``.
+        x0 : Tensor, optional
+            Warm start of shape ``(B, n)`` or ``(n,)``; zeros if omitted.
+        t : int, optional
+            Number of iterations, ``t >= 0`` (default 1).
+        operator : LinearOperator
+            Measurement operator; treated as fixed.
+
+        Returns
+        -------
+        Tensor
+            Solution of shape ``(B, n)``.
+        """
         if t < 0:
             raise ValueError('t must be non-negative.')
         y, x0, _, residual_gradient, callback_metadata = self._prepare_update(y, x0, operator)

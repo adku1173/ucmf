@@ -8,16 +8,27 @@ from torch import nn
 
 
 class LearnedParams:
-    """Mixin learning one ``gamma`` and ``theta`` per unfolded iteration.
+    """Mixin learning one step size and one threshold per unfolded iteration.
 
     Combine with a weight base that implements ``_prepare_update``; the mixin
-    owns the step parameters and ``forward``. ``gamma`` / ``theta`` are the
-    applied softplus values of the unconstrained ``_gamma`` / ``_theta``.
+    owns the step parameters and ``forward``. All arguments are keyword-only.
 
-    Args:
-        num_iterations (int): number of unfolded iterations/layers.
-        gamma_init (float): initial applied step size for every iteration.
-        theta_init (float): initial applied soft-threshold for every iteration.
+    Parameters
+    ----------
+    num_iterations : int
+        Number of unfolded iterations (layers).
+    gamma_init : float
+        Initial applied step size of every iteration.
+    theta_init : float
+        Initial applied soft-threshold of every iteration.
+    **kwargs
+        Arguments of the weight base.
+
+    Attributes
+    ----------
+    gamma, theta : Tensor
+        Applied per-iteration values of shape ``(num_iterations,)``, the
+        softplus of the unconstrained parameters ``_gamma`` and ``_theta``.
     """
 
     def __init__(self, *, num_iterations, gamma_init, theta_init, **kwargs):
@@ -39,11 +50,27 @@ class LearnedParams:
         return F.softplus(self._theta)
 
     def forward(self, y, x0=None, t=1, operator=None):
-        """Run ``t`` unfolded iterations with a fixed operator and learned weights.
+        """Run ``t`` unfolded iterations with a fixed operator and the learned parameters.
 
         Inputs and model parameters must already share ``y``'s dtype and device.
         For a subset, ``y`` must follow ``operator.rows`` in the full measurement
         coordinates of the auxiliary weights. Row indices must be in range.
+
+        Parameters
+        ----------
+        y : Tensor
+            Measurements of shape ``(B, m)`` or ``(m,)``.
+        x0 : Tensor, optional
+            Warm start of shape ``(B, n)`` or ``(n,)``; zeros if omitted.
+        t : int, optional
+            Number of iterations, ``0 <= t <= num_iterations`` (default 1).
+        operator : LinearOperator
+            Measurement operator; treated as fixed.
+
+        Returns
+        -------
+        Tensor
+            Solution of shape ``(B, n)``.
         """
         validate_unfolded_iterations(t, self.num_iterations)
         y, x0, gradient, _, callback_metadata = self._prepare_update(y, x0, operator)

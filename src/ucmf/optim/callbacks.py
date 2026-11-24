@@ -6,24 +6,48 @@ import torch
 class IterationCallback:
     """Base class for callbacks receiving the solver and its current iterate.
 
-    Override ``on_step_begin`` or ``on_step_end``. Set ``solver.stop = True``
+    Override :meth:`on_step_begin` or :meth:`on_step_end`. Set ``solver.stop = True``
     in either method to stop the current solve. Iteration indices are zero-based.
     """
 
     def on_step_begin(self, solver, x, **kwargs):
-        """Called before the step, with ``solver.iter`` set to its index."""
+        """Handle the beginning of an iteration.
+
+        Parameters
+        ----------
+        solver : ISTA
+            The running solver; ``solver.iter`` is the index of the coming step.
+        x : Tensor
+            Current iterate of shape ``(B, n)``; may be modified in place.
+        **kwargs
+            No keywords are passed at the beginning of a step.
+        """
 
     def on_step_end(self, solver, x, **kwargs):
-        """Receive gamma, theta, A, W, y; classical solvers report W=A."""
+        """Handle the end of an iteration.
+
+        Parameters
+        ----------
+        solver : ISTA
+            The running solver; ``solver.iter`` is the index of the completed step.
+        x : Tensor
+            Iterate after the step, shape ``(B, n)``, with its autograd graph.
+        **kwargs
+            ``gamma`` and ``theta`` of the step, the detached measurement operator
+            ``A``, the effective weight operator ``W`` (``A`` for classical solvers),
+            ``y``, and model-specific entries such as ``W_recurrent``.
+        """
 
 
 class StepParamCollector(IterationCallback):
     """Record detached step sizes and thresholds at each iteration.
 
-    ``gammas_tensor`` and ``thetas_tensor`` stack the collected values along
-    their first (iteration) dimension. Remaining dimensions follow the supplied
-    parameters: scalars give ``(T,)``, per-sample values give ``(T, B, 1)``.
-    Call ``reset()`` before reusing the collector for a new solve.
+    Call :meth:`reset` before reusing the collector for a new solve.
+
+    Attributes
+    ----------
+    gammas, thetas : list of Tensor
+        Collected values on the iterate's device and dtype, one per completed step.
     """
 
     def __init__(self):
@@ -43,7 +67,15 @@ class StepParamCollector(IterationCallback):
 
     @property
     def gammas_tensor(self):
-        """Stack collected step sizes along the iteration dimension."""
+        """Collected step sizes stacked along a leading iteration axis.
+
+        Scalar values give shape ``(T,)``, per-sample values ``(T, B, 1)``.
+
+        Raises
+        ------
+        RuntimeError
+            If no values were collected.
+        """
         if not self.gammas:
             msg = 'No gamma values collected. Run a forward pass first.'
             raise RuntimeError(msg)
@@ -51,7 +83,15 @@ class StepParamCollector(IterationCallback):
 
     @property
     def thetas_tensor(self):
-        """Stack collected thresholds along the iteration dimension."""
+        """Collected thresholds stacked along a leading iteration axis.
+
+        Scalar values give shape ``(T,)``, per-sample values ``(T, B, 1)``.
+
+        Raises
+        ------
+        RuntimeError
+            If no values were collected.
+        """
         if not self.thetas:
             msg = 'No theta values collected. Run a forward pass first.'
             raise RuntimeError(msg)
@@ -59,11 +99,15 @@ class StepParamCollector(IterationCallback):
 
 
 class IntermediateOutputCollector(IterationCallback):
-    """Record iterates WITHOUT detaching their computational graphs.
+    """Record iterates without detaching their computational graphs.
 
-    ``intermediates`` contains one ``(B, n)`` tensor per completed step. The
-    buffer resets automatically at the beginning of iteration zero. For a
-    zero-iteration solve, no callbacks run; call ``reset()`` explicitly.
+    The buffer resets automatically at the beginning of iteration zero. A
+    zero-iteration solve runs no callbacks; call :meth:`reset` explicitly.
+
+    Attributes
+    ----------
+    intermediates : list of Tensor
+        One ``(B, n)`` iterate per completed step.
     """
 
     def __init__(self):
@@ -86,17 +130,37 @@ class IntermediateOutputCollector(IterationCallback):
 class SolutionChangeStopper(IterationCallback):
     """Stop once consecutive iterates change by less than ``tol``.
 
-    The default relative criterion is
-    ``||x_k - x_previous|| / max(||x_k||, ||x_previous||, eps) < tol``.
-    Set ``relative=False`` to use absolute changes. All samples in a batch
-    must satisfy the criterion. State resets at iteration zero of each solve.
-    ``stop_iter`` is zero-based; ``num_steps`` counts completed steps.
+    The relative criterion is
+    ``||x_k - x_previous|| / max(||x_k||, ||x_previous||, eps) < tol``; all samples
+    of a batch must satisfy it. State resets at iteration zero of each solve.
 
     The criterion is evaluated only for every ``check_every``-th step (after
     ``check_every``, ``2 * check_every``, ... completed steps), comparing that
     step's consecutive iterates. Other steps cost no tensor operations and,
     on GPUs, no host-device synchronization. Stopping can therefore happen up
     to ``check_every - 1`` steps after the change first fell below ``tol``.
+
+    Parameters
+    ----------
+    tol : float, optional
+        Tolerance of the change (default 1e-6).
+    relative : bool, optional
+        If True (default), use the relative change, otherwise ``||x_k - x_previous||``.
+    eps : float, optional
+        Lower bound of the relative scale (default 1e-12).
+    check_every : int, optional
+        Evaluate the criterion every ``check_every`` steps (default 100).
+
+    Attributes
+    ----------
+    converged : bool
+        Whether the last solve stopped by this criterion.
+    stop_iter : int or None
+        Zero-based index of the step at which the solve stopped.
+    num_steps : int
+        Number of completed steps of the last solve.
+    last_change : Tensor or None
+        Per-sample change at the last checked step.
     """
 
     def __init__(self, tol=1e-6, relative=True, eps=1e-12, check_every=100):

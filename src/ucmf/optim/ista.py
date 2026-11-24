@@ -1,17 +1,8 @@
-"""Iterative Shrinkage-Thresholding Algorithms (ISTA and FISTA).
+"""Iterative shrinkage-thresholding algorithms (ISTA and FISTA).
 
-This module provides PyTorch implementations of:
-    - ISTA: Iterative Shrinkage-Thresholding Algorithm
-    - FISTA: Fast Iterative Shrinkage-Thresholding Algorithm
-
-Both solve the LASSO problem:
-    min_x 1/(2 m) ||y - A x||_2^2 + λ ||x||_1,
-    where m is the length of y / number of measurements.
-
-With support for:
-    - Non-negativity constraints (nonnegative shrinkage)
-    - Normalized least-squares data fitting
-    - Callback-based early stopping and monitoring
+Both solve the normalized LASSO problem ``min_x ||y - A x||_2^2 / (2 m) + lam ||x||_1``
+with ``m`` measurements, optionally constrained to ``x >= 0``. Callbacks can
+monitor the iterations and stop them early.
 """
 
 import math
@@ -29,23 +20,29 @@ from torch import nn
 
 
 class ISTA(nn.Module):
-    """
-    Iterative Shrinkage-Thresholding Algorithm (ISTA) for LASSO.
+    """Iterative shrinkage-thresholding algorithm (ISTA) for the normalized LASSO.
 
-    Solves the objective:
-        min_x 1/(2 m) ||y - A x||_2^2 + λ ||x||_1
+    Minimizes ``||y - A x||_2^2 / (2 m) + lam ||x||_1``. Each step moves along the
+    negative gradient of the data term, ``A.T @ (y - A x) / m``, and applies the
+    proximal threshold ``theta = gamma * lam``.
 
-    The ISTA/FISTA step uses the negative gradient of the normalized data-fit
-    term, ``A.T @ (y - A x) / m``. The matching proximal threshold is therefore
-    ``theta = gamma * λ``.
+    Iterates are local variables in an explicit loop. Subclasses can reuse input
+    preparation, gradient/proximal steps, and callback helpers without a state
+    container or iteration framework; see ``docs/architecture.md``.
 
-    Args:
-        nonnegative (bool): if True, enforces non-negativity on the solution
-        callbacks (list | None): optional solver callbacks
+    Parameters
+    ----------
+    nonnegative : bool, optional
+        If True (default), constrain the solution to ``x >= 0``.
+    callbacks : list of IterationCallback, optional
+        Callbacks run at the beginning and the end of every iteration.
 
-    Iterates are local variables in an explicit loop. Subclasses can reuse
-    input preparation, gradient/proximal steps, and callback helpers without
-    a state container or iteration framework; see ``docs/architecture.md``.
+    Attributes
+    ----------
+    iter : int
+        Zero-based index of the current iteration, set during a solve.
+    stop : bool
+        Set to True by a callback to stop the current solve.
     """
 
     def __init__(
@@ -60,15 +57,37 @@ class ISTA(nn.Module):
 
     @staticmethod
     def shrink(x, thresh):
-        """Element-wise soft-thresholding for a non-negative threshold."""
+        """Soft-threshold ``x`` element-wise.
+
+        Parameters
+        ----------
+        x : Tensor
+            Values to shrink.
+        thresh : float or Tensor
+            Non-negative threshold, broadcastable to ``x``.
+
+        Returns
+        -------
+        Tensor
+            ``sign(x) * max(|x| - thresh, 0)``.
+        """
         return x - x.clamp(min=-thresh, max=thresh)
 
     @staticmethod
     def shrink_nonnegative(x, thresh):
-        """Element-wise nonnegative soft-thresholding.
+        """Soft-threshold ``x`` element-wise and keep only non-negative values.
 
-        For nonnegative shrinkage, we want max(x - theta, 0), not max(|x| - theta, 0).
-        This enforces non-negativity on the output while applying the threshold.
+        Parameters
+        ----------
+        x : Tensor
+            Values to shrink.
+        thresh : float or Tensor
+            Non-negative threshold, broadcastable to ``x``.
+
+        Returns
+        -------
+        Tensor
+            ``max(x - thresh, 0)``, not ``max(|x| - thresh, 0)``.
         """
         return F.relu(x - thresh)
 
@@ -92,13 +111,36 @@ class ISTA(nn.Module):
         return residual_gradient
 
     def get_shrink_func(self):
-        """Get shrinkage function based on the non-negativity constraint."""
+        """Return the shrinkage function for the configured constraint.
+
+        Returns
+        -------
+        callable
+            :meth:`shrink_nonnegative` if :attr:`nonnegative`, otherwise :meth:`shrink`.
+        """
         if self.nonnegative:
             return self.shrink_nonnegative
         return self.shrink
 
     def step(self, x, gradient, shrink_func, gamma, theta):
-        """Perform a single proximal step using the prepared direction."""
+        """Perform one proximal gradient step.
+
+        Parameters
+        ----------
+        x : Tensor
+            Current point of shape ``(B, n)``.
+        gradient : callable
+            Prepared negative-gradient direction ``gradient(x)`` of shape ``(B, n)``.
+        shrink_func : callable
+            Shrinkage function, see :meth:`get_shrink_func`.
+        gamma, theta : float or Tensor
+            Step size and threshold, scalar or per sample with shape ``(B, 1)``.
+
+        Returns
+        -------
+        Tensor
+            ``shrink_func(x + gamma * gradient(x), theta)``.
+        """
         return shrink_func(x + gamma * gradient(x), theta)
 
     def _prepare_operator_inputs(self, y, x0, operator):
@@ -190,27 +232,37 @@ class ISTA(nn.Module):
         return x
 
     def forward(self, y, x0=None, t=1, operator=None, lam=None, gamma=None):
-        """Solve with a fixed measurement operator, without an independent weight.
+        """Solve with a fixed measurement operator.
 
-        All tensor inputs must already share y's dtype and device; mismatches
-        raise ValueError. Convert arrays and move/cast tensors in preprocessing.
-        Subclass-specific inputs belong in an overridden forward.
+        All tensor inputs must already share ``y``'s dtype and device. Convert
+        arrays and move or cast tensors beforehand. Subclass-specific inputs
+        belong in an overridden ``forward``.
 
-        Args:
-            y (Tensor): measurements of shape ``(B, m)`` or ``(m,)``
-            x0 (Tensor | None): optional init of shape ``(B, n)`` or ``(n,)``
-            t (int): number of iterations
-            operator (LinearOperator): shared or per-problem measurement
-                operator, with dtype and device matching y; treated as fixed.
-            lam (float | Tensor | None): required regularization
-                strength, scalar or per-sample with shape ``(B,)`` / ``(B, 1)``.
-            gamma (float | Tensor | None): scalar or per-sample
-                step size. Defaults to ``1 / L`` with ``L = 1.05 * ||A||_2**2 / m``
-                (power-iteration estimate, see ``default_gamma_from_operator``).
+        Parameters
+        ----------
+        y : Tensor
+            Measurements of shape ``(B, m)`` or ``(m,)``.
+        x0 : Tensor, optional
+            Warm start of shape ``(B, n)`` or ``(n,)``; zeros if omitted.
+        t : int, optional
+            Number of iterations (default 1).
+        operator : LinearOperator
+            Shared or per-problem measurement operator; treated as fixed.
+        lam : float or Tensor
+            Regularization strength, scalar or per sample with shape ``(B,)`` or ``(B, 1)``.
+        gamma : float or Tensor, optional
+            Step size, scalar or per sample. Defaults to ``1 / L`` with
+            ``L = 1.05 * ||A||_2**2 / m``, see :func:`.default_gamma_from_operator`.
 
         Returns
         -------
-            Tensor: solution of shape ``(B, n)``
+        Tensor
+            Solution of shape ``(B, n)``.
+
+        Raises
+        ------
+        ValueError
+            If an input has an invalid type, shape, dtype, or device, or ``lam`` is missing.
         """
         if t < 0:
             msg = 't must be non-negative.'
@@ -227,13 +279,10 @@ class ISTA(nn.Module):
 
 
 class FISTA(ISTA):
-    """
-    Fast Iterative Shrinkage-Thresholding Algorithm (FISTA) for LASSO.
+    """Fast iterative shrinkage-thresholding algorithm (FISTA) for the normalized LASSO.
 
-    Solves the objective:
-        min_x 1/(2 m) ||y - A x||_2^2 + λ ||x||_1
-
-    Uses Nesterov momentum acceleration for faster convergence than ISTA.
+    Same objective, parameters, and interface as :class:`ISTA`, with Nesterov
+    momentum for faster convergence.
     """
 
     def _nesterov_momentum(self, tk, x, x_next):
