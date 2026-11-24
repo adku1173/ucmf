@@ -234,7 +234,7 @@ def test_auxiliary_propagation_forward_and_adjoint_match_dense_reference(r_diag,
     matrix = full[..., rows, :][..., rows] if r_diag else full
     operator = _AuxiliaryPropagationOperator(Br, HermitianVectorization(2, r_diag=r_diag))
     x = torch.randn(BATCH_SIZE, matrix.shape[-1], dtype=matrix.dtype, generator=rng)
-    r = torch.randn_like(x)
+    r = torch.randn(x.shape, dtype=x.dtype, generator=rng)
     assert_operator_matches(operator, matrix, x, r)
 
 
@@ -264,7 +264,7 @@ def test_isometry_and_inverse_on_its_domain(r_diag):
     back_real, back_imag = hvec.adjoint(v)
     torch.testing.assert_close(back_real, real)
     torch.testing.assert_close(back_imag, imag)
-    w = torch.randn(3, hvec.num_measurements, dtype=torch.float64)
+    w = torch.randn(3, hvec.num_measurements, dtype=torch.float64, generator=torch.Generator().manual_seed(1))
     torch.testing.assert_close(hvec(*hvec.adjoint(w)), w)
 
 
@@ -273,7 +273,7 @@ def test_adjoint_satisfies_dot_product_test(r_diag):
     """<hvec(S), v> = <S, hvec*(v)>_F for Hermitian S (with diagonal for r_diag=True)."""
     hvec = HermitianVectorization(C, r_diag=r_diag)
     real, imag = random_hermitian(5)
-    v = torch.randn(5, hvec.num_measurements, dtype=torch.float64)
+    v = torch.randn(5, hvec.num_measurements, dtype=torch.float64, generator=torch.Generator().manual_seed(2))
     adj_real, adj_imag = hvec.adjoint(v)
     lhs = (hvec(real, imag) * v).sum(-1)
     rhs = (real * adj_real).sum((-2, -1)) + (imag * adj_imag).sum((-2, -1))

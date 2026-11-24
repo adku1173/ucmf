@@ -179,9 +179,10 @@ def test_forward_rejects_operator_of_another_array_size(spec):
 @parametrize_with_cases(SPEC, cases=ModelCases, has_tag=('unfolded', 'dense'))
 def test_row_subset_validation(spec, idx, batch, message):
     model = build_model(spec)
-    A = torch.randn(4, 4, dtype=torch.float64) if batch is None else torch.randn(batch, 4, 4, dtype=torch.float64)
+    rng = torch.Generator().manual_seed(0)
+    A = torch.randn((4, 4) if batch is None else (batch, 4, 4), dtype=torch.float64, generator=rng)
     with pytest.raises(ValueError, match=message):
-        spec.solve(model, torch.randn(batch or 1, 4, dtype=torch.float64), MatrixMult(A, rows=idx))
+        spec.solve(model, torch.randn(batch or 1, 4, dtype=torch.float64, generator=rng), MatrixMult(A, rows=idx))
 
 
 @parametrize_with_cases(SPEC, cases=ModelCases, has_tag='cmf_only')

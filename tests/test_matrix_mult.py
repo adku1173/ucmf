@@ -8,7 +8,7 @@ import torch
 
 @pytest.mark.parametrize('shape', [(6, 5), (3, 6, 5)], ids=['shared', 'batched'])
 def test_keeps_input_matrix(shape):
-    A = torch.randn(shape, dtype=torch.float64)
+    A = torch.randn(shape, dtype=torch.float64, generator=torch.Generator().manual_seed(0))
     assert MatrixMult(A).matrix is A
 
 

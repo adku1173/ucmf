@@ -99,7 +99,7 @@ def test_power_iteration_is_exact_for_diagonal_matrix():
 
 
 def test_power_iteration_is_deterministic_and_leaves_global_rng_untouched():
-    A = torch.randn(30, 20, dtype=torch.float64)
+    A = torch.randn(30, 20, dtype=torch.float64, generator=torch.Generator().manual_seed(2))
     state = torch.get_rng_state()
     first = default_gamma_from_operator(MatrixMult(A))
     assert torch.equal(torch.get_rng_state(), state)

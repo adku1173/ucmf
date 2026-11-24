@@ -12,27 +12,45 @@ import torch
 from pytest_cases import parametrize_with_cases
 
 
+@pytest.fixture(autouse=True)
+def fresh_compile_cache():
+    """Each test compiles anew; otherwise the recompile limit (8) silently falls back to eager."""
+    torch._dynamo.reset()
+
+
+SETTINGS = [
+    # device, dtype, torch.compile mode, (rtol, atol) of iterates, (rtol, atol) of gradients
+    pytest.param('cpu', torch.float64, 'default', (1e-12, 1e-12), (1e-10, 1e-12), id='cpu-default'),
+    pytest.param(
+        'cuda', torch.float32, 'reduce-overhead', (1e-4, 1e-5), (1e-4, 1e-5), id='cuda-graphs',
+        marks=pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA is not available'),
+    ),
+]
+
+
+@pytest.mark.parametrize(('device', 'dtype', 'mode', 'tol', 'grad_tol'), SETTINGS)
 @parametrize_with_cases('spec', cases=ModelCases, has_tag='unfolded')
-def test_compiled_model_matches_eager_with_changing_mic_subsets(spec):
+def test_compiled_model_matches_eager_with_changing_mic_subsets(spec, device, dtype, mode, tol, grad_tol):
     """Training scenario: per-problem microphone subsets and propagation matrices change per batch."""
     rng = torch.Generator().manual_seed(8)
-    model = perturb_weights(build_model(spec, r_diag=True))
-    compiled = compile_unrolled(model, T, mode='default')
+    complex_dtype = torch.complex128 if dtype == torch.float64 else torch.complex64
+    model = perturb_weights(build_model(spec, r_diag=True)).to(device=device, dtype=dtype)
+    compiled = compile_unrolled(model, T, mode=mode)
     params = tuple(model.parameters())
-    y_full = torch.randn(2, NUM_MICS * (NUM_MICS - 1), dtype=torch.float64, generator=rng)
+    y_full = torch.randn(2, NUM_MICS * (NUM_MICS - 1), dtype=dtype, generator=rng).to(device)
 
     for mics in ([[0, 1, 2], [0, 2, 3]], [[1, 2, 3], [0, 1, 3]]):
-        H = torch.randn(2, NUM_MICS, NUM_SOURCES, dtype=torch.complex128, generator=rng)
-        operator = CMFPropagation(H, r_diag=True).select_mics(torch.tensor(mics))
+        H = torch.randn(2, NUM_MICS, NUM_SOURCES, dtype=complex_dtype, generator=rng).to(device)
+        operator = CMFPropagation(H, r_diag=True).select_mics(torch.tensor(mics, device=device))
         y = y_full.gather(1, operator.rows)
         actual = compiled(y, operator=operator)
         expected = torch.stack([model(y, operator=operator, t=t) for t in range(1, T + 1)])
-        torch.testing.assert_close(actual, expected, rtol=1e-12, atol=1e-12)
+        torch.testing.assert_close(actual, expected, rtol=tol[0], atol=tol[1])
 
         got = torch.autograd.grad(actual.square().sum(), params)
         want = torch.autograd.grad(expected.square().sum(), params)
         for grad, reference in zip(got, want, strict=True):
-            torch.testing.assert_close(grad, reference, rtol=1e-10, atol=1e-12)
+            torch.testing.assert_close(grad, reference, rtol=grad_tol[0], atol=grad_tol[1])
 
 
 def test_returns_all_iterates_and_restores_callbacks(recorder):
@@ -40,7 +58,9 @@ def test_returns_all_iterates_and_restores_callbacks(recorder):
     compiled = compile_unrolled(model, T, mode='default')
     own = [recorder]
     model.callbacks = own
-    out = compiled(torch.randn(3, 6, dtype=torch.float64), operator=MatrixMult(torch.randn(6, 4, dtype=torch.float64)))
+    rng = torch.Generator().manual_seed(0)
+    y = torch.randn(3, 6, dtype=torch.float64, generator=rng)
+    out = compiled(y, operator=MatrixMult(torch.randn(6, 4, dtype=torch.float64, generator=rng)))
     assert out.shape == (T, 3, 4)
     assert len(recorder.end_kwargs) == T  # the model's own callbacks stay active
     assert model.callbacks == own  # the collector is removed again
