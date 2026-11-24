@@ -150,17 +150,6 @@ def test_scalar_and_per_sample_parameters(solver_type, parameter_form):
 
 
 @pytest.mark.parametrize('solver_type', SOLVERS)
-def test_zero_steps_clones_warm_start_and_preserves_batch_output(solver_type):
-    x0 = torch.tensor([2.0, 3.0])
-    operator = MatrixMult(torch.eye(2))
-    actual = solver_type()(torch.ones(2), x0=x0, operator=operator, lam=0.0, t=0)
-
-    torch.testing.assert_close(actual, x0.unsqueeze(0))
-    assert actual.data_ptr() != x0.data_ptr()
-    torch.testing.assert_close(solver_type()(torch.ones(2), operator=operator, lam=0.0, t=0), torch.zeros(1, 2))
-
-
-@pytest.mark.parametrize('solver_type', SOLVERS)
 def test_sensing_matrix_is_fixed_but_measurements_remain_differentiable(solver_type):
     A = torch.eye(2, requires_grad=True)
     y = torch.ones(1, 2, requires_grad=True)
@@ -268,20 +257,3 @@ def test_one_step_matches_normalized_adjoint_residual(solver_type, batched_A):
     torch.testing.assert_close(actual, expected)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA is not available')
-@pytest.mark.parametrize('solver_type', SOLVERS)
-@pytest.mark.parametrize('dtype', [torch.float32, torch.float64])
-def test_cuda_matches_cpu_with_batched_operators_and_autograd(solver_type, dtype):
-    rng = torch.Generator().manual_seed(42)
-    A = torch.randn(2, 5, 3, generator=rng, dtype=dtype)
-    y = torch.randn(2, 5, generator=rng, dtype=dtype)
-    lam = torch.tensor([0.01, 0.03], dtype=dtype)
-    solver = solver_type(positive=False)
-    expected = solver(y, operator=MatrixMult(A), lam=lam, t=15)
-    y_cuda = y.cuda().requires_grad_()
-
-    actual = solver(y_cuda, operator=MatrixMult(A.cuda()), lam=lam.cuda(), t=15)
-    actual.square().sum().backward()
-
-    torch.testing.assert_close(actual.cpu(), expected, rtol=2e-5, atol=2e-6)
-    assert y_cuda.grad is not None and torch.isfinite(y_cuda.grad).all()

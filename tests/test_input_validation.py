@@ -1,26 +1,21 @@
-"""Forward validates caller-prepared tensors before any solver iteration."""
+"""Forward validates caller-prepared operator, lam, and gamma; x0 is tested for all models in test_models."""
 
 from ucmf import FISTA, ISTA
-from ucmf.optim import IterationCallback
 from ucmf.optim.operator import MatrixMult
 
 import numpy as np
 import pytest
 import torch
+from helpers import MustNotRun
 
 
 @pytest.mark.parametrize('solver_type', [ISTA, FISTA])
-@pytest.mark.parametrize('name', ['operator', 'x0', 'lam', 'gamma'])
+@pytest.mark.parametrize('name', ['operator', 'lam', 'gamma'])
 @pytest.mark.parametrize('mismatch', ['dtype', 'device', 'integer', 'complex', 'array'])
 def test_forward_rejects_incompatible_inputs_before_callbacks(solver_type, name, mismatch):
-    class MustNotRun(IterationCallback):
-        def on_step_begin(self, solver, x, **kwargs):
-            pytest.fail('Invalid inputs must be rejected before iteration begins.')
-
     inputs = {
         'y': torch.ones(2, 2),
         'operator': MatrixMult(torch.eye(2)),
-        'x0': torch.zeros(2, 2),
         'lam': torch.full((2,), 0.1),
         'gamma': torch.full((2,), 0.2),
     }
@@ -63,10 +58,10 @@ def test_forward_requires_explicit_array_preprocessing(solver_type, name):
     assert solver_type()(**inputs, t=1).shape == (2, 2)
 
 
-@pytest.mark.parametrize('name', ['operator', 'x0', 'lam', 'gamma'])
+@pytest.mark.parametrize('name', ['operator', 'lam', 'gamma'])
 def test_mismatches_are_rejected_even_for_zero_iterations(name):
     inputs = {'y': torch.ones(2, 2), 'operator': MatrixMult(torch.eye(2)), 'lam': 0.1, 'gamma': 0.2}
-    value = torch.ones((2, 2) if name in ('operator', 'x0') else (2,), dtype=torch.float64)
+    value = torch.ones((2, 2) if name == 'operator' else (2,), dtype=torch.float64)
     inputs[name] = MatrixMult(value) if name == 'operator' else value
     with pytest.raises(ValueError, match=f'{name} must have dtype'):
         ISTA()(**inputs, t=0)

@@ -68,10 +68,10 @@ def test_default_step_size_uses_spectral_norm_without_autograd(batched):
 def test_power_iteration_estimates_squared_spectral_norm_from_below(batched):
     # Accuracy depends on the gap sigma_2 / sigma_1 (here 0.8 by construction);
     # generic random matrices may converge much more slowly.
-    torch.manual_seed(1)
+    rng = torch.Generator().manual_seed(1)
     batch = (3,) if batched else ()
-    U = torch.linalg.qr(torch.randn(*batch, 40, 25, dtype=torch.float64)).Q
-    V = torch.linalg.qr(torch.randn(*batch, 25, 25, dtype=torch.float64)).Q
+    U = torch.linalg.qr(torch.randn(*batch, 40, 25, dtype=torch.float64, generator=rng)).Q
+    V = torch.linalg.qr(torch.randn(*batch, 25, 25, dtype=torch.float64, generator=rng)).Q
     sigma = torch.linspace(0.8, 0.1, 25, dtype=torch.float64)
     sigma[0] = 1.0
     A = (U * sigma) @ V.mT
@@ -83,8 +83,7 @@ def test_power_iteration_estimates_squared_spectral_norm_from_below(batched):
 
 
 def test_power_iteration_is_a_lower_bound_for_random_matrices():
-    torch.manual_seed(1)
-    A = torch.randn(20, 40, 25, dtype=torch.float64)
+    A = torch.randn(20, 40, 25, dtype=torch.float64, generator=torch.Generator().manual_seed(1))
     exact = torch.linalg.matrix_norm(A, ord=2) ** 2
     assert torch.all(estimate_squared_spectral_norm(A) <= exact * (1 + 1e-12))  # Rayleigh quotient
 

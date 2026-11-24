@@ -14,19 +14,14 @@ from ucmf.optim.utils import default_gamma_from_A, default_gamma_from_operator
 import numpy as np
 import pytest
 import torch
-from pytest_cases import case, parametrize, parametrize_with_cases
-from unfolded_model_cases import NUM_MICS, UnfoldedModelCases, build_model
+from cases.models import ModelCases, build_model
+from cases.operators import BATCH_SIZE, OperatorCases, cmf_matrix
+from cases.problems import NUM_MICS
+from helpers import assert_operator_matches
+from pytest_cases import parametrize_with_cases
 
 C = 4
-BATCH_SIZE = 3
 OPERATOR = 'operator, matrix'
-
-
-def cmf_matrix(H, r_diag):
-    """Dense CMF dictionary of ``H``: column ``j`` is ``hvec(h_j h_j^H)``."""
-    columns = H.mT.unsqueeze(-1) * H.mH.unsqueeze(-2)  # One outer product per source.
-    hvec = HermitianVectorization(H.shape[-2], r_diag=r_diag)
-    return hvec(columns.real, columns.imag).mT
 
 
 def per_problem(tensor, index, dim):
@@ -36,53 +31,18 @@ def per_problem(tensor, index, dim):
     return torch.stack([t.index_select(dim, i) for t, i in zip(tensors, indices, strict=True)])
 
 
-def assert_operator_matches(operator, matrix):
+def assert_matches_on_random_inputs(operator, matrix):
     """``forward`` and ``adjoint`` of ``operator`` act like ``matrix`` (shared or per problem)."""
     rng = torch.Generator().manual_seed(42)
     m, n = matrix.shape[-2:]
     x = torch.randn(BATCH_SIZE, n, dtype=matrix.dtype, generator=rng)
     r = torch.randn(BATCH_SIZE, m, dtype=matrix.dtype, generator=rng)
-    torch.testing.assert_close(operator.forward(x), (matrix @ x.unsqueeze(-1)).squeeze(-1))
-    torch.testing.assert_close(operator.adjoint(r), (matrix.mT @ r.unsqueeze(-1)).squeeze(-1))
-
-
-class OperatorCases:
-    """Construct each operator alongside its explicit reference matrix.
-
-    Tags: ``cmf`` (microphone selection and transformation), ``rows`` (row selection).
-    """
-
-    @case(tags='rows')
-    @parametrize('batched', [False, True], ids=['shared', 'batched'])
-    def case_matrix_mult(self, batched):
-        rng = torch.Generator().manual_seed(0)
-        shape = (BATCH_SIZE, 6, 5) if batched else (6, 5)
-        matrix = torch.randn(shape, dtype=torch.float64, generator=rng)
-        return MatrixMult(matrix), matrix
-
-    @case(tags='cmf')
-    @parametrize('batched', [False, True], ids=['shared', 'batched'])
-    @parametrize('r_diag', [False, True], ids=['full', 'off-diagonal'])
-    def case_cmf_propagation(self, batched, r_diag):
-        return self._cmf_case(CMFPropagation, batched, r_diag)
-
-    @case(tags=('cmf', 'rows'))
-    @parametrize('batched', [False, True], ids=['shared', 'batched'])
-    @parametrize('r_diag', [False, True], ids=['full', 'off-diagonal'])
-    def case_cmf_dictionary(self, batched, r_diag):
-        return self._cmf_case(CMFDictionary, batched, r_diag)
-
-    @staticmethod
-    def _cmf_case(operator_type, batched, r_diag):
-        rng = torch.Generator().manual_seed(17)
-        shape = (BATCH_SIZE, 5, 4) if batched else (5, 4)
-        H = torch.randn(shape, dtype=torch.complex128, generator=rng)
-        return operator_type(H, r_diag=r_diag), cmf_matrix(H, r_diag)
+    assert_operator_matches(operator, matrix, x, r)
 
 
 @parametrize_with_cases(OPERATOR, cases=OperatorCases)
 def test_forward_adjoint_and_metadata(operator, matrix):
-    assert_operator_matches(operator, matrix)
+    assert_matches_on_random_inputs(operator, matrix)
     rng = torch.Generator().manual_seed(1)
     x = torch.randn(BATCH_SIZE, matrix.shape[-1], dtype=matrix.dtype, generator=rng)
     r = torch.randn(BATCH_SIZE, matrix.shape[-2], dtype=matrix.dtype, generator=rng)
@@ -98,7 +58,7 @@ def test_forward_adjoint_and_metadata(operator, matrix):
 @parametrize_with_cases(OPERATOR, cases=OperatorCases)
 def test_select_columns_matches_column_subset(operator, matrix, cols):
     sub = operator.select_columns(cols)
-    assert_operator_matches(sub, per_problem(matrix, cols, dim=1))
+    assert_matches_on_random_inputs(sub, per_problem(matrix, cols, dim=1))
     assert sub.shape == (matrix.shape[-2], cols.shape[-1]) and sub.rows is None
     assert sub.batch_size == (BATCH_SIZE if operator.batch_size or cols.ndim == 2 else None)
 
@@ -113,13 +73,13 @@ def test_select_mics_matches_subarray_and_original_rows(operator, matrix, mics):
     sub = operator.select_mics(mics)
     sorted_mics = mics.sort(dim=-1).values  # the block keeps ascending microphone order
     torch.testing.assert_close(sub.mics, sorted_mics)
-    assert_operator_matches(sub, cmf_matrix(per_problem(H, sorted_mics, dim=0), r_diag))
-    assert_operator_matches(sub, per_problem(matrix, sub.rows, dim=0))
+    assert_matches_on_random_inputs(sub, cmf_matrix(per_problem(H, sorted_mics, dim=0), r_diag))
+    assert_matches_on_random_inputs(sub, per_problem(matrix, sub.rows, dim=0))
 
     nested = sub.select_mics(torch.tensor([2, 0]))  # local indices into the selected block
     torch.testing.assert_close(nested.mics, sorted_mics[..., torch.tensor([0, 2])])
-    assert_operator_matches(nested, cmf_matrix(per_problem(H, nested.mics, dim=0), r_diag))
-    assert_operator_matches(nested, per_problem(matrix, nested.rows, dim=0))
+    assert_matches_on_random_inputs(nested, cmf_matrix(per_problem(H, nested.mics, dim=0), r_diag))
+    assert_matches_on_random_inputs(nested, per_problem(matrix, nested.rows, dim=0))
 
     reduced = nested.select_columns(torch.tensor([3, 0]))
     torch.testing.assert_close(reduced.rows, nested.rows)
@@ -133,7 +93,7 @@ def test_transformed_propagates_through_br_and_keeps_subset(operator, matrix):
     Br = torch.randn(3, 3, dtype=operator.H.dtype, generator=torch.Generator().manual_seed(6))
     transformed = sub.transformed(Br)
     H_sub = per_problem(operator.H, mics.sort(dim=-1).values, dim=0)
-    assert_operator_matches(transformed, cmf_matrix(Br @ H_sub, operator.r_diag))
+    assert_matches_on_random_inputs(transformed, cmf_matrix(Br @ H_sub, operator.r_diag))
     torch.testing.assert_close(transformed.rows, sub.rows)
     torch.testing.assert_close(transformed.mics, sub.mics)
 
@@ -147,22 +107,22 @@ def test_transformed_propagates_through_br_and_keeps_subset(operator, matrix):
 def test_select_rows_matches_row_subset_and_keeps_original_indices(operator, matrix, rows):
     sub = operator.select_rows(rows)
     assert type(sub) is MatrixMult
-    assert_operator_matches(sub, per_problem(matrix, rows, dim=0))
+    assert_matches_on_random_inputs(sub, per_problem(matrix, rows, dim=0))
     torch.testing.assert_close(sub.rows, rows)
 
     local = torch.tensor([[0, 2], [3, 1], [1, 0]])
     nested = sub.select_rows(local)
     original = torch.stack([r[i] for r, i in zip(rows.expand(BATCH_SIZE, -1), local, strict=True)])
     torch.testing.assert_close(nested.rows, original)
-    assert_operator_matches(nested, per_problem(matrix, original, dim=0))
+    assert_matches_on_random_inputs(nested, per_problem(matrix, original, dim=0))
     torch.testing.assert_close(nested.select_columns(torch.tensor([0, 2])).rows, original)
 
 
 @pytest.mark.parametrize('operator_type', [CMFDictionary, CMFPropagation])
 @pytest.mark.parametrize('r_diag', [False, True])
-@parametrize_with_cases('make_model, dense_weights', cases=UnfoldedModelCases)
-def test_model_rejects_mic_subset_from_incompatible_full_array(make_model, dense_weights, operator_type, r_diag):
-    model = build_model(make_model, r_diag)
+@parametrize_with_cases('spec', cases=ModelCases, has_tag='learned')
+def test_model_rejects_mic_subset_from_incompatible_full_array(spec, operator_type, r_diag):
+    model = build_model(spec, r_diag)
     H = torch.ones(NUM_MICS + 1, 3, dtype=torch.complex128)
     operator = operator_type(H, r_diag=r_diag).select_mics(torch.tensor([0, 1, 2]))
     operator = operator.select_mics(torch.tensor([0, 1])).select_columns(torch.tensor([0, 2])).detached()
@@ -172,9 +132,9 @@ def test_model_rejects_mic_subset_from_incompatible_full_array(make_model, dense
 
 
 @parametrize_with_cases(OPERATOR, cases=OperatorCases, has_tag='rows')
-@parametrize_with_cases('make_model, dense_weights', cases=UnfoldedModelCases, has_tag='dense')
-def test_model_rejects_row_subset_from_incompatible_full_matrix(make_model, dense_weights, operator, matrix):
-    model = build_model(make_model)
+@parametrize_with_cases('spec', cases=ModelCases, has_tag=('learned', 'dense'))
+def test_model_rejects_row_subset_from_incompatible_full_matrix(spec, operator, matrix):
+    model = build_model(spec)
     subset = operator.select_rows(torch.tensor([0, 1, 2])).select_rows(torch.tensor([0, 1]))
     subset = subset.select_columns(torch.tensor([0, 1]))
     y = matrix.new_ones((operator.batch_size or 1, subset.shape[0]))
@@ -274,15 +234,14 @@ def test_auxiliary_propagation_forward_and_adjoint_match_dense_reference(r_diag,
     operator = _AuxiliaryPropagationOperator(Br, HermitianVectorization(2, r_diag=r_diag))
     x = torch.randn(BATCH_SIZE, matrix.shape[-1], dtype=matrix.dtype, generator=rng)
     r = torch.randn_like(x)
-    torch.testing.assert_close(operator.forward(x), (matrix @ x.unsqueeze(-1)).squeeze(-1))
-    torch.testing.assert_close(operator.adjoint(r), (matrix.mT @ r.unsqueeze(-1)).squeeze(-1))
+    assert_operator_matches(operator, matrix, x, r)
 
 
 def random_hermitian(*batch, r_diag=False):
     """Real (symmetric) and imaginary (antisymmetric) parts of random Hermitian matrices."""
-    torch.manual_seed(0)
-    X = torch.randn(*batch, C, C, dtype=torch.float64)
-    Y = torch.randn(*batch, C, C, dtype=torch.float64)
+    rng = torch.Generator().manual_seed(0)
+    X = torch.randn(*batch, C, C, dtype=torch.float64, generator=rng)
+    Y = torch.randn(*batch, C, C, dtype=torch.float64, generator=rng)
     real, imag = X + X.mT, Y - Y.mT
     if r_diag:
         real = real - torch.diag_embed(torch.diagonal(real, dim1=-2, dim2=-1))
