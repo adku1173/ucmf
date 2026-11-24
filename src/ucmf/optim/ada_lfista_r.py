@@ -1,4 +1,10 @@
-"""Two-weight reduced Ada-LFISTA (Ada-LFISTA-R) for CMF measurements."""
+"""Two-weight reduced Ada-LFISTA (Ada-LFISTA-R) for CMF measurements.
+
+Like ``AdaLFISTA``, but both ``m x m`` auxiliary weights are congruences with
+learned complex ``c x c`` matrices ``Br1`` (recurrence ``R``) and ``Br2``
+(measurement branch ``M``), as in ``AdaLFISTASWR``. Neither weight is
+materialized. ``Br1 = Br2 = I`` recovers FISTA.
+"""
 
 from .ista import FISTA
 from .learned_params import LearnedParams
@@ -10,7 +16,7 @@ from torch import nn
 
 
 class _ReducedTwoWeights(FISTA):
-    """Update direction ``(M.T @ y - R.T @ (R @ z)) / m`` with congruences ``Br1`` (R) and ``Br2`` (M)."""
+    """Update direction ``(M.T @ y - R.T @ (R @ z)) / m``; ``Br1`` defines ``R``, ``Br2`` ``M``."""
 
     def __init__(self, *, num_mics, nonnegative=True, callbacks=None, r_diag=False):
         super().__init__(nonnegative=nonnegative, callbacks=callbacks)
@@ -52,30 +58,52 @@ class AdaLFISTAR(LearnedParams, _ReducedTwoWeights):
 
     ``Br1`` defines the recurrence ``R``, and ``Br2`` the measurement branch
     ``M``. Both start at identity and stay factored. The update direction is
-    ``(M.T @ y - R.T @ (R @ z)) / m``. All arguments are keyword-only.
+    ``(M.T @ y - R.T @ (R @ z)) / m``. With a removed diagonal, both weights act
+    on zero-diagonal CSMs and keep only the off-diagonal output. All arguments
+    are keyword-only.
 
-    ``num_mics`` is the full array size, and ``r_diag`` must match the CMF
-    operator. With a removed diagonal, both weights act on zero-diagonal CSMs
-    and keep only the off-diagonal output. End callbacks get operators ``A``,
-    ``W = M`` and ``W_recurrent = R``.
+    Parameters
+    ----------
+    num_iterations : int
+        Number of unfolded iterations (layers).
+    gamma_init : float
+        Initial applied step size of every iteration.
+    theta_init : float
+        Initial applied soft-threshold of every iteration.
+    num_mics : int
+        Number of microphones of the full array.
+    nonnegative : bool, optional
+        If True (default), constrain the solution to ``x >= 0``.
+    callbacks : list of IterationCallback, optional
+        Solver callbacks; end callbacks get the operators ``A``, ``W = M``, and ``W_recurrent = R``.
+    r_diag : bool, optional
+        Whether the CSM diagonal is omitted (default False); must match the operator.
     """
 
 
 class NA_AdaLFISTAR(NeuralAugmentation, _ReducedTwoWeights):
-    """NA-Ada-LFISTA-R: trainable ``Br1_*`` and ``Br2_*``; an LSTM predicts ``gamma_k`` and ``theta_k``.
+    """NA-Ada-LFISTA-R: trainable ``Br1_*`` and ``Br2_*``; an LSTM predicts the step parameters.
 
-    Same update direction as the learned-parameter variant, but the step size
-    and threshold are predicted per sample and iteration from the residual and
-    direction norms. Any ``t >= 0`` is allowed. Call ``init_normalizers`` once
-    before solving. All arguments are keyword-only.
+    Same update direction as :class:`AdaLFISTAR`, but the step size and threshold
+    are predicted per sample and iteration from the residual and direction norms,
+    see :class:`~ucmf.optim.neural_augmentation.NeuralAugmentation`. Any ``t >= 0``
+    is allowed. Call ``init_normalizers`` once before solving. All arguments are
+    keyword-only.
 
-    Args:
-        num_mics (int): number of microphones in the full array.
-        gamma_init (float): initial applied step size of the controller readout.
-        theta_init (float): initial applied soft-threshold of the controller readout.
-        lstm_dim (int): hidden size of the LSTM controller (default 128).
-        nonnegative (bool): enforce non-negativity via nonnegative shrinkage.
-        callbacks (list | None): optional callbacks; end callbacks get
-            ``A``, ``W = M`` and ``W_recurrent = R``.
-        r_diag (bool): whether the CSM diagonal is omitted; must match the operator.
+    Parameters
+    ----------
+    gamma_init : float
+        Initial applied step size of the controller readout.
+    theta_init : float
+        Initial applied soft-threshold of the controller readout.
+    lstm_dim : int, optional
+        Hidden size of the LSTM controller (default 128).
+    num_mics : int
+        Number of microphones of the full array.
+    nonnegative : bool, optional
+        If True (default), constrain the solution to ``x >= 0``.
+    callbacks : list of IterationCallback, optional
+        Solver callbacks; end callbacks get the operators ``A``, ``W = M``, and ``W_recurrent = R``.
+    r_diag : bool, optional
+        Whether the CSM diagonal is omitted (default False); must match the operator.
     """

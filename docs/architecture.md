@@ -1,182 +1,57 @@
 # Solver architecture
 
-The classical interface is:
-
-```python
-from ucmf import FISTA
-from ucmf.optim.operator import MatrixMult
-
-solver = FISTA(nonnegative=True, callbacks=[])
-x = solver(y, x0=None, t=100, operator=MatrixMult(A), lam=0.01, gamma=None)
-```
-
-ISTA has the same interface. There is no public W input and no gradient-mode
-selector: both classes use normalized least squares. See
-[the current decision](adr/0003-local-loops-and-ls-only.md).
-
-## Read the algorithm directly
+## Classical solvers
 
 ```text
 forward → _prepare_operator_inputs → resolve lam/gamma/theta → _iterate
-    ISTA:  x ← proximal step at x
-    FISTA: _iterate_accelerated
-             x_next ← proximal step at z
-             tk, z, x ← Nesterov update
+  ISTA:  x ← shrink(x + gamma · gradient(x), theta)
+  FISTA: _iterate_accelerated: x_next ← step at z; tk, z ← Nesterov update
 ```
 
-`ISTA._iterate` and `FISTA._iterate_accelerated` each contain an explicit loop.
-FISTA keeps x, z, and tk local; a new call always initializes them afresh.
-There are no dataclasses, context objects, runner, or state-mutating closures.
-The small amount of repeated loop control is intentional: the full algorithm
-is visible without following a generic iteration framework.
+- Explicit loops with local `x`, `z`, `tk`; no state objects ([0003](adr/0003-local-loops-and-ls-only.md)).
+- `_prepare_operator_inputs` validates `y`, `x0`, and the operator (shape, batch size, dtype,
+  device), detaches the operator, and turns a missing `x0` into zeros. It never casts or moves.
+- `_make_gradient(y, operator, weight_operator)` binds the data once per solve and returns
+  `gradient(x)`; subclasses override it to change the direction.
+- Stateless helpers live in `utils.py` and are no subclass hooks.
 
-The shared mathematics remains in `step`, `_make_gradient`, shrinkage/operator helpers,
-and `_nesterov_momentum`. Stateless tensor preparation, batch-parameter handling,
-operator application, step-size calculation, and shape validation live in
-`src/ucmf/optim/utils.py` and are called directly. They are not subclass hooks.
-The source SFISTA, ALFISTA, NA_ALISTA, and NA_ALFISTA classes override none of
-these utilities. `_make_gradient(y, operator, weight_operator)` binds the data
-and operators once per solve and returns the negative gradient direction at `x`.
+## Callback lifecycle
 
-Input conversion belongs to preprocessing. Classical forward requires a
-`LinearOperator` and checks that its shape, batch size, dtype, and device
-match the inputs. It detaches the operator and never silently moves or casts
-inputs.
-Internally allocated solution vectors use `y.new_zeros(...)`.
-Learned models must likewise be placed explicitly with `model.to(...)` before
-forward; model-owned schedules/controllers remain responsible for their outputs.
+`_start_iterations` clears `stop`. Per step, `_on_iteration_begin` sets `iter` and runs the
+begin callbacks (a requested stop ends the loop), then the step runs, then
+`_on_iteration_end` passes `gamma`, `theta`, and `callback_metadata` (`A`, `W`, `y`,
+model-specific entries) to the end callbacks. Classical solves pass `W = A`.
+Solvers and callbacks are not reentrant.
 
-Both loops call `_start_iterations`,
-`_on_iteration_begin`, and `_on_iteration_end` for the same callback lifecycle:
+## Unfolded models: weight base × step-parameter mixin
 
-1. Clear the stop flag.
-2. Before each step, set the iteration index and run begin callbacks.
-3. Stop immediately if requested; otherwise compute the step.
-4. Run end callbacks with the completed solution, gamma, theta, and the
-   separate `callback_metadata` (`A`, `W`, `y`, and model-specific fields).
+| Weight base | `LearnedParams` | `NeuralAugmentation` |
+| --- | --- | --- |
+| `_SingleWeight` (`B`) | `AdaLFISTASW` | `NA_AdaLFISTASW` |
+| `_TwoWeights` (`B1`, `B2`) | `AdaLFISTA` | `NA_AdaLFISTA` |
+| `_ReducedSingleWeight` (`Br`) | `AdaLFISTASWR` | `NA_AdaLFISTASWR` |
+| `_ReducedTwoWeights` (`Br1`, `Br2`) | `AdaLFISTAR` | `NA_AdaLFISTAR` |
 
-For classical solves A and W refer to the same detached operator. Callback order, batched
-stopping, intermediate autograd graphs, and zero-step behavior are unchanged.
-The callback attributes `iter` and `stop` remain mutable (`y` is passed only as metadata);
-one shared solver/callback instance is not made concurrent or reentrant.
+- Weight bases subclass FISTA and implement `_prepare_update(y, x0, operator)` →
+  `(y, x0, gradient, residual_gradient, callback_metadata)`.
+- Mixins own `forward`: `LearnedParams` runs `_iterate_accelerated` with per-layer
+  `softplus(_gamma)`, `softplus(_theta)`; `NeuralAugmentation` runs its own loop with local
+  LSTM state ([0008](adr/0008-neural-augmentation-mixins.md)). New step-parameter kinds are
+  new mixins, new weight types new bases.
+- Directions: SW/SWR `W.T (y - A z) / m` with `W = B A`; LFISTA/R `(M.T y - R.T R z) / m`
+  with `R = B1 A`, `M = B2 A` ([0004](adr/0004-single-weight-ada-lfista.md),
+  [0006](adr/0006-two-matrix-ada-lfista.md)). SWR/R use the congruence
+  `B v = hvec(Br hvec*(v) Br^H)`. Subsets restrict the weights via `operator.rows` / `operator.mics`.
+- `weight_mode='precomputed'` (SW, LFISTA) forms the dense product once per solve.
 
-## Learned step schedules
+## Compilation
 
-`_iterate_accelerated` takes a prepared `gradient(x)`, `callback_metadata`,
-and a `step_params_fn` for the schedule.
-The schedule returns `(gamma_k, theta_k)` for one iteration. It runs after
-begin callbacks, exactly once per executed step, and never for t=0.
+`compile_unrolled(model, t_max)` compiles once and returns all iterates `(t_max, B, n)`;
+stage `t` uses `out[t - 1]`. All models compile to one graph without host syncs.
 
-For example, an already-prepared learned subclass can implement:
+## Tests
 
-```python
-def _step_params(self, k):
-    return self.gammas[k], self.thetas[k]
-
-def _iterate(self, y, x0, gamma, theta, t, *, gradient, callback_metadata):
-    return self._iterate_accelerated(
-        y, x0, t, self._step_params,
-        gradient=gradient, callback_metadata=callback_metadata,
-    )
-```
-
-The schedule can select trainable tensors without detaching them. The model
-owns parameter constraints and valid iteration counts. For a tied LASSO
-threshold, return `lam * gamma_k`; directly learned theta is a different policy.
-
-## Recurrent models own their loop
-
-A neurally augmented model can override forward or `_iterate`, initialize
-hidden/cell tensors locally, and predict gamma/theta inside a normal for-loop.
-Reuse the prepared `gradient(x)`, `get_shrink_func`, the prepared warm start `x0`
-(always a tensor; copy it with `x0.clone()`), and the callback helpers. An accelerated version
-can reuse `_nesterov_momentum` with local x, z, tk; it returns `(tk, z)`
-and the caller assigns `x = x_next`.
-
-This is the same straightforward control-flow pattern as
-[NA-ALISTA's reference implementation](https://github.com/feeds/na-alista/blob/master/utils/algorithms.py).
-No state dataclass is needed for autograd. The seam is the concrete schedule
-or model-owned loop, not a
-universal controller framework; locality and leverage come from the shared
-mathematics and callback helpers rather than another adapter.
-
-## Subclasses own weighted forward inputs
-
-A weighted model overrides forward instead of passing W to `super().forward`.
-It prepares the fixed operator with `_prepare_operator_inputs` and builds its
-effective weight as a `LinearOperator` from its own parameters, e.g. with
-`make_weight_operator(operator, self.B)` from `weights.py`:
-
-```python
-y, x0, operator = self._prepare_operator_inputs(y, x0, operator)
-weight_operator = make_weight_operator(operator, self.B)
-return self._iterate_accelerated(
-    y, x0, t, step_params_fn,
-    gradient=self._make_gradient(y, operator, weight_operator),
-    callback_metadata={'A': operator, 'W': weight_operator, 'y': y},
-)
-```
-
-The operator is detached; the weight operator keeps its autograd graph.
-There is no tensor A/W path. The classical automatic LS step-size guarantee
-need not hold for W != A.
-
-## Single-weight Ada-LFISTA
-
-`AdaLFISTASW` (`src/ucmf/optim/ada_lfista_sw.py`) uses the same operator
-interface as FISTA, with a learned adjoint-side weight.
-
-```text
-forward(y, x0, t, operator)
-    _prepare_operator_inputs                # validate and detach A
-    B_active = B or B[I, I]                   # I = operator.rows
-    W = B_active @ A                         # factored or precomputed
-    _iterate_accelerated(..., step_params_fn=k -> (gamma[k], theta[k]))
-        r = y - A.forward(z)
-        x_next = shrink(z + gamma_k * W.adjoint(r) / m, theta_k)
-```
-
-Trainable parameters are `B` (identity init), `_gamma` and `_theta`; the
-properties `gamma` / `theta` are the applied, softplus-constrained values.
-The constructor's `weight_mode='factored'` (default) applies
-`Aᵀ(B_activeᵀr)` without forming `W`. `weight_mode='precomputed'` forms
-`W` once per solve and requires `MatrixMult` or `CMFDictionary`; it never
-converts `CMFPropagation` to a dense dictionary.
-
-For microphone CV, call `select_mics` and align `y` using `operator.rows`.
-These indices must refer to the full measurement coordinates of `B`.
-End callbacks receive the detached measurement operator as `A` and the
-effective weight operator as `W` in both modes; gradients through `B` are preserved.
-
-`compile_unrolled(model, t_max)` (`compile.py`) compiles one graph for `t_max`
-iterations and returns all iterates `(t_max, B, n)` via an
-`IntermediateOutputCollector`. Staged training uses `out[t - 1]` without a
-recompilation per stage.
-
-`AdaLFISTA` (`ada_lfista.py`, [0006](adr/0006-two-matrix-ada-lfista.md)) uses
-`operator=` and restricts both `B1` and `B2` using `operator.rows`. It computes
-`M.adjoint(y)` once with the factored `M = B2_active @ A`. The recurrence
-uses `R.adjoint(R.forward(z))` with `R = B1_active @ A`. By default `R` is
-factored; `weight_mode='precomputed'` builds only `R` and requires a dense
-measurement operator. End callbacks receive operators `A`, `W = M`, and
-`W_recurrent = R`.
-
-## Intentional removals
-
-- `ls_mode`, `tls_grad`, and TLS dispatch/warnings: LS is the only objective.
-- `IterationState`, `IterationContext`, `_IterationRunner`, and `iteration.py`.
-- `initialize_state`, `step_parameters`, `iteration_step`, `update_state`.
-- The generic `_run_iterations` and `_iterate_scheduled` drivers. Custom loops
-  now live in `_iterate` or `_iterate_accelerated` and reuse the callback helpers.
-
-When porting original unfolded constructors, remove `ls_mode='ls'` from their
-`super().__init__` call. NA_ALISTA's `_resolve_batch_param(...)` call should
-become an import of `resolve_batch_param` from `ucmf.optim.utils`; validate its
-optional tensor-valued lam before reshaping, without the old `reference_tensor`
-argument. No compatibility alias is needed. Do not silently map TLS requests
-to LS. See the [migration guide](migration.md) for the gradient and iteration
-hooks used by custom subclasses.
-
-“The interface is the test surface”: numerical oracles, KKT checks, autograd,
-unfolded models against a shared dense reference, learned schedules, local recurrent loops, repeat
-solves, and callback behavior are tested rather than state-container internals.
+`tests/cases/` holds the pytest-cases: `ModelCases` (every model as a `ModelSpec`, tagged
+`classical`/`unfolded`, `learned`/`na`, `dense`, `cmf_only`, `weight_mode`, `two_weights`),
+`ProblemCases`, and `OperatorCases`. `tests/helpers.py` holds callbacks and the dense
+reference iteration. Shared properties are tested once in `test_models.py`.

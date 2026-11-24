@@ -71,37 +71,58 @@ class AdaLFISTA(LearnedParams, _TwoWeights):
 
     All arguments are keyword-only.
 
-    Args:
-        num_iterations (int): number of unfolded iterations/layers.
-        num_measurements (int): full measurement dimension ``m`` spanned by ``B1``/``B2``.
-        gamma_init (float): initial applied step size for every iteration.
-        theta_init (float): initial applied soft-threshold for every iteration.
-        nonnegative (bool): enforce non-negativity via nonnegative shrinkage.
-        callbacks (list | None): optional solver callbacks. End callbacks get the
-            operators ``A``, ``W = M`` and ``W_recurrent = R``.
-        B1, B2 (Tensor | None): optional ``(m, m)`` inits; default identity.
-        weight_mode (str): ``'factored'`` leaves ``R`` as a composition.
-            ``'precomputed'`` forms ``R`` once per solve and requires a dense
-            measurement operator. ``M`` stays factored in either mode.
+    Parameters
+    ----------
+    num_iterations : int
+        Number of unfolded iterations (layers).
+    gamma_init : float
+        Initial applied step size of every iteration.
+    theta_init : float
+        Initial applied soft-threshold of every iteration.
+    num_measurements : int
+        Full measurement dimension ``m`` spanned by ``B1`` and ``B2``.
+    nonnegative : bool, optional
+        If True (default), constrain the solution to ``x >= 0``.
+    callbacks : list of IterationCallback, optional
+        Solver callbacks; end callbacks get the operators ``A``, ``W = M``, and ``W_recurrent = R``.
+    B1, B2 : Tensor, optional
+        Initial ``(m, m)`` weights of the recurrence and the measurement branch;
+        default identity.
+    weight_mode : {'factored', 'precomputed'}, optional
+        ``'factored'`` (default) leaves ``R`` as a composition. ``'precomputed'``
+        forms ``R`` once per solve and requires a dense measurement operator.
+        ``M`` stays factored in either mode.
     """
 
 
 class NA_AdaLFISTA(NeuralAugmentation, _TwoWeights):
-    """NA-Ada-LFISTA: trainable ``B1`` and ``B2``; an LSTM predicts ``gamma_k`` and ``theta_k``.
+    """NA-Ada-LFISTA: trainable ``B1`` and ``B2``; an LSTM predicts the step size and threshold.
 
-    Same update direction as the learned-parameter variant, but the step size
-    and threshold are predicted per sample and iteration from the residual and
-    direction norms. Any ``t >= 0`` is allowed. Call ``init_normalizers`` once
-    before solving. All arguments are keyword-only.
+    Same update direction as :class:`AdaLFISTA`, but the step size and threshold
+    are predicted per sample and iteration from the residual and direction norms,
+    see :class:`~ucmf.optim.neural_augmentation.NeuralAugmentation`. Any ``t >= 0``
+    is allowed. Call ``init_normalizers`` once before solving. All arguments are
+    keyword-only.
 
-    Args:
-        num_measurements (int): full measurement dimension ``m`` spanned by ``B1``/``B2``.
-        gamma_init (float): initial applied step size of the controller readout.
-        theta_init (float): initial applied soft-threshold of the controller readout.
-        lstm_dim (int): hidden size of the LSTM controller (default 128).
-        nonnegative (bool): enforce non-negativity via nonnegative shrinkage.
-        callbacks (list | None): optional solver callbacks; end callbacks get
-            ``A``, ``W = M`` and ``W_recurrent = R``.
-        B1, B2 (Tensor | None): optional ``(m, m)`` inits; default identity.
-        weight_mode (str): ``'factored'`` or ``'precomputed'``, as for ``AdaLFISTA``.
+    Parameters
+    ----------
+    gamma_init : float
+        Initial applied step size of the controller readout.
+    theta_init : float
+        Initial applied soft-threshold of the controller readout.
+    lstm_dim : int, optional
+        Hidden size of the LSTM controller (default 128).
+    num_measurements : int
+        Full measurement dimension ``m`` spanned by ``B1`` and ``B2``.
+    nonnegative : bool, optional
+        If True (default), constrain the solution to ``x >= 0``.
+    callbacks : list of IterationCallback, optional
+        Solver callbacks; end callbacks get the operators ``A``, ``W = M``, and ``W_recurrent = R``.
+    B1, B2 : Tensor, optional
+        Initial ``(m, m)`` weights of the recurrence and the measurement branch;
+        default identity.
+    weight_mode : {'factored', 'precomputed'}, optional
+        ``'factored'`` (default) leaves ``R`` as a composition. ``'precomputed'``
+        forms ``R`` once per solve and requires a dense measurement operator.
+        ``M`` stays factored in either mode.
     """

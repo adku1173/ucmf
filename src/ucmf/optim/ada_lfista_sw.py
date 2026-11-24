@@ -57,36 +57,56 @@ class AdaLFISTASW(LearnedParams, _SingleWeight):
 
     All arguments are keyword-only.
 
-    Args:
-        num_iterations (int): number of unfolded iterations/layers.
-        num_measurements (int): measurement dimension ``m`` spanned by ``B``.
-        gamma_init (float): initial applied step size for every iteration.
-        theta_init (float): initial applied soft-threshold for every iteration.
-        nonnegative (bool): enforce non-negativity via nonnegative shrinkage.
-        callbacks (list | None): optional solver callbacks.
-        B (Tensor | None): optional ``(m, m)`` init for the auxiliary weight matrix;
-            defaults to the identity, reproducing classical FISTA.
-        weight_mode (str): ``'factored'`` applies ``A.T @ (B.T @ r)`` without
-            forming ``W``. ``'precomputed'`` forms ``W = B @ A`` once per solve
-            and requires a dense ``MatrixMult`` or ``CMFDictionary`` operator.
+    Parameters
+    ----------
+    num_iterations : int
+        Number of unfolded iterations (layers).
+    gamma_init : float
+        Initial applied step size of every iteration.
+    theta_init : float
+        Initial applied soft-threshold of every iteration.
+    num_measurements : int
+        Full measurement dimension ``m`` spanned by ``B``.
+    nonnegative : bool, optional
+        If True (default), constrain the solution to ``x >= 0``.
+    callbacks : list of IterationCallback, optional
+        Solver callbacks; end callbacks get the operators ``A`` and ``W``.
+    B : Tensor, optional
+        Initial ``(m, m)`` auxiliary weight; defaults to the identity, which reproduces FISTA.
+    weight_mode : {'factored', 'precomputed'}, optional
+        ``'factored'`` (default) applies ``A.T @ (B.T @ r)`` without forming ``W``.
+        ``'precomputed'`` forms ``W = B @ A`` once per solve and requires a dense
+        ``MatrixMult`` or ``CMFDictionary`` operator.
     """
 
 
 class NA_AdaLFISTASW(NeuralAugmentation, _SingleWeight):
-    """NA-Ada-LFISTA-SW: trainable ``B``; an LSTM predicts ``gamma_k`` and ``theta_k``.
+    """NA-Ada-LFISTA-SW: trainable ``B``; an LSTM predicts the step size and threshold.
 
-    Same update direction as the learned-parameter variant, but the step size
-    and threshold are predicted per sample and iteration from the residual and
-    direction norms. Any ``t >= 0`` is allowed. Call ``init_normalizers`` once
-    before solving. All arguments are keyword-only.
+    Same update direction as :class:`AdaLFISTASW`, but the step size and threshold
+    are predicted per sample and iteration from the residual and direction norms,
+    see :class:`~ucmf.optim.neural_augmentation.NeuralAugmentation`. Any ``t >= 0``
+    is allowed. Call ``init_normalizers`` once before solving. All arguments are
+    keyword-only.
 
-    Args:
-        num_measurements (int): measurement dimension ``m`` spanned by ``B``.
-        gamma_init (float): initial applied step size of the controller readout.
-        theta_init (float): initial applied soft-threshold of the controller readout.
-        lstm_dim (int): hidden size of the LSTM controller (default 128).
-        nonnegative (bool): enforce non-negativity via nonnegative shrinkage.
-        callbacks (list | None): optional solver callbacks.
-        B (Tensor | None): optional ``(m, m)`` init; defaults to the identity.
-        weight_mode (str): ``'factored'`` or ``'precomputed'``, as for ``AdaLFISTASW``.
+    Parameters
+    ----------
+    gamma_init : float
+        Initial applied step size of the controller readout.
+    theta_init : float
+        Initial applied soft-threshold of the controller readout.
+    lstm_dim : int, optional
+        Hidden size of the LSTM controller (default 128).
+    num_measurements : int
+        Full measurement dimension ``m`` spanned by ``B``.
+    nonnegative : bool, optional
+        If True (default), constrain the solution to ``x >= 0``.
+    callbacks : list of IterationCallback, optional
+        Solver callbacks; end callbacks get the operators ``A`` and ``W``.
+    B : Tensor, optional
+        Initial ``(m, m)`` auxiliary weight; defaults to the identity, which reproduces FISTA.
+    weight_mode : {'factored', 'precomputed'}, optional
+        ``'factored'`` (default) applies ``A.T @ (B.T @ r)`` without forming ``W``.
+        ``'precomputed'`` forms ``W = B @ A`` once per solve and requires a dense
+        ``MatrixMult`` or ``CMFDictionary`` operator.
     """

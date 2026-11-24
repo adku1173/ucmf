@@ -76,8 +76,22 @@ class TorchSolver(LeastSquaresSolver):
     def solve(self, problem, dictionary_matrix, data, start_value=None):
         """Solve one frequency bin.
 
-        With :attr:`tol` set, ``info`` reports ``num_steps`` and ``converged``;
-        otherwise it is empty.
+        Parameters
+        ----------
+        problem : L1RegularizedLeastSquaresProblem
+            Problem providing ``alpha``, ``unit_mult`` and ``nonnegative``.
+        dictionary_matrix : numpy.ndarray
+            Scaled dictionary of shape ``(n_data, n_sources)``.
+        data : numpy.ndarray
+            Scaled measurement data of shape ``(n_data,)``.
+        start_value : numpy.ndarray, optional
+            Warm start of shape ``(n_sources,)``.
+
+        Returns
+        -------
+        SolverOutput
+            Solution as a NumPy array. With :attr:`tol` set, ``info`` reports
+            ``num_steps`` and ``converged``; otherwise it is empty.
         """
         dtype = getattr(torch, self.precision)
         operator = MatrixMult(torch.as_tensor(dictionary_matrix, dtype=dtype, device=self.device))

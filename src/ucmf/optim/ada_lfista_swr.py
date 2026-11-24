@@ -54,31 +54,48 @@ class AdaLFISTASWR(LearnedParams, _ReducedSingleWeight):
 
     All arguments are keyword-only.
 
-    Args:
-        num_iterations (int): number of unfolded iterations/layers.
-        num_mics (int): number of microphones in the full array.
-        gamma_init (float): initial applied step size for every iteration.
-        theta_init (float): initial applied soft-threshold for every iteration.
-        nonnegative (bool): enforce non-negativity via nonnegative shrinkage.
-        callbacks (list | None): optional callbacks; ``A`` and ``W`` are operators.
-        r_diag (bool): whether the CSM diagonal is omitted; must match the operator.
+    Parameters
+    ----------
+    num_iterations : int
+        Number of unfolded iterations (layers).
+    gamma_init : float
+        Initial applied step size of every iteration.
+    theta_init : float
+        Initial applied soft-threshold of every iteration.
+    num_mics : int
+        Number of microphones of the full array.
+    nonnegative : bool, optional
+        If True (default), constrain the solution to ``x >= 0``.
+    callbacks : list of IterationCallback, optional
+        Solver callbacks; end callbacks get the operators ``A`` and ``W``.
+    r_diag : bool, optional
+        Whether the CSM diagonal is omitted (default False); must match the operator.
     """
 
 
 class NA_AdaLFISTASWR(NeuralAugmentation, _ReducedSingleWeight):
-    """NA-Ada-LFISTA-SWR: trainable ``Br_re`` and ``Br_im``; an LSTM predicts ``gamma_k`` and ``theta_k``.
+    """NA-Ada-LFISTA-SWR: trainable ``Br_re`` and ``Br_im``; an LSTM predicts the step parameters.
 
-    Same update direction as the learned-parameter variant, but the step size
-    and threshold are predicted per sample and iteration from the residual and
-    direction norms. Any ``t >= 0`` is allowed. Call ``init_normalizers`` once
-    before solving. All arguments are keyword-only.
+    Same update direction as :class:`AdaLFISTASWR`, but the step size and threshold
+    are predicted per sample and iteration from the residual and direction norms,
+    see :class:`~ucmf.optim.neural_augmentation.NeuralAugmentation`. Any ``t >= 0``
+    is allowed. Call ``init_normalizers`` once before solving. All arguments are
+    keyword-only.
 
-    Args:
-        num_mics (int): number of microphones in the full array.
-        gamma_init (float): initial applied step size of the controller readout.
-        theta_init (float): initial applied soft-threshold of the controller readout.
-        lstm_dim (int): hidden size of the LSTM controller (default 128).
-        nonnegative (bool): enforce non-negativity via nonnegative shrinkage.
-        callbacks (list | None): optional callbacks; ``A`` and ``W`` are operators.
-        r_diag (bool): whether the CSM diagonal is omitted; must match the operator.
+    Parameters
+    ----------
+    gamma_init : float
+        Initial applied step size of the controller readout.
+    theta_init : float
+        Initial applied soft-threshold of the controller readout.
+    lstm_dim : int, optional
+        Hidden size of the LSTM controller (default 128).
+    num_mics : int
+        Number of microphones of the full array.
+    nonnegative : bool, optional
+        If True (default), constrain the solution to ``x >= 0``.
+    callbacks : list of IterationCallback, optional
+        Solver callbacks; end callbacks get the operators ``A`` and ``W``.
+    r_diag : bool, optional
+        Whether the CSM diagonal is omitted (default False); must match the operator.
     """

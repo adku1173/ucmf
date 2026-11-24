@@ -35,7 +35,7 @@ def _validate_index(index, name, device, batch_size):
 
 
 def _take(tensor, index, dim, batched):
-    """Select ``index`` along ``dim`` of a shared or batched tensor; per-problem index -> batched."""
+    """Select ``index`` along ``dim`` of a shared or batched tensor; a per-problem index batches."""
     if index.ndim == 1:
         return tensor.index_select(dim, index)
     if not batched:  # shared tensor, per-problem index: (B, ...) via advanced indexing
@@ -50,22 +50,66 @@ def _take(tensor, index, dim, batched):
 class LinearOperator:
     """Batched real linear operator ``A: R^n -> R^m`` used by the solvers.
 
-    Subclasses set ``shape = (m, n)``, ``batch_size``, ``rows``, ``dtype``,
-    ``device`` and implement ``forward`` / ``adjoint``.
+    Subclasses set the attributes below and implement :meth:`forward`,
+    :meth:`adjoint`, and :meth:`detached`.
+
+    Attributes
+    ----------
+    shape : tuple of int
+        ``(m, n)``: active measurement rows and sources.
+    batch_size : int or None
+        Number of problems of a per-problem operator; None for a shared one.
+    rows : Tensor or None
+        Indices of the active rows in the full measurement set, shared ``(m,)``
+        or per problem ``(B, m)``; None for all rows.
+    dtype : torch.dtype
+        Real dtype of inputs and outputs.
+    device : torch.device
+        Device of the operator data.
     """
 
     _num_measurements_total = None
 
     def forward(self, x):
-        """``A x`` for ``x`` of shape ``(B, n)``; returns ``(B, m)``."""
+        """Apply ``A``.
+
+        Parameters
+        ----------
+        x : Tensor
+            Source vectors of shape ``(B, n)``.
+
+        Returns
+        -------
+        Tensor
+            ``A x`` of shape ``(B, m)``.
+        """
         raise NotImplementedError
 
     def adjoint(self, r):
-        """``A^T r`` for ``r`` of shape ``(B, m)``; returns ``(B, n)``."""
+        """Apply ``A^T``.
+
+        Parameters
+        ----------
+        r : Tensor
+            Measurement vectors of shape ``(B, m)``.
+
+        Returns
+        -------
+        Tensor
+            ``A^T r`` of shape ``(B, n)``.
+        """
         raise NotImplementedError
 
     def detached(self):
-        """Return an operator with detached data sharing storage and unchanged subset metadata."""
+        """Return the operator with detached data.
+
+        The data share storage with this operator; the subset metadata are unchanged.
+
+        Returns
+        -------
+        LinearOperator
+            Operator of the same type through which no gradients flow.
+        """
         raise NotImplementedError
 
     def _subset_rows(self, index):
@@ -76,9 +120,22 @@ class LinearOperator:
 
 
 class MatrixMult(LinearOperator):
-    """Operator given by a stored real matrix ``(m, n)`` (shared) or ``(B, m, n)``.
+    """Operator given by a stored real matrix.
 
-    The matrix is used as given (no copy, no detach): ``matrix`` exposes it.
+    The matrix is used as given, without copy or detach.
+
+    Parameters
+    ----------
+    matrix : Tensor
+        Real floating-point matrix, shared ``(m, n)`` or per problem ``(B, m, n)``.
+    rows : Tensor, optional
+        Indices of the matrix rows in the full measurement set if ``matrix`` is
+        already a row subset. Such an operator does not know the full size.
+
+    Attributes
+    ----------
+    matrix : Tensor
+        The stored matrix.
     """
 
     def __init__(self, matrix, rows=None):
@@ -94,11 +151,13 @@ class MatrixMult(LinearOperator):
         self.device = matrix.device
 
     def forward(self, x):
+        """Multiply by the matrix, see :meth:`LinearOperator.forward`."""
         if self.matrix.ndim == 2:
             return F.linear(x, self.matrix)
         return torch.bmm(self.matrix, x.unsqueeze(-1)).squeeze(-1)
 
     def adjoint(self, r):
+        """Multiply by the transposed matrix, see :meth:`LinearOperator.adjoint`."""
         if self.matrix.ndim == 2:
             return r @ self.matrix
         return torch.bmm(r.unsqueeze(1), self.matrix).squeeze(1)
@@ -109,17 +168,40 @@ class MatrixMult(LinearOperator):
         return op
 
     def detached(self):
-        """Reuse the matrix storage without tracking gradients through it."""
+        """Return the operator of the detached matrix, sharing its storage."""
         return self._with_matrix(self.matrix.detach(), rows=self.rows)
 
     def select_rows(self, index):
-        """Operator of the measurement rows ``index``: ``A[index, :]`` (per problem: ``A_b[index_b, :]``)."""
+        """Select measurement rows.
+
+        Parameters
+        ----------
+        index : Tensor
+            Local row indices, shared ``(k,)`` or per problem ``(B, k)``.
+
+        Returns
+        -------
+        MatrixMult
+            ``A[index, :]`` (per problem ``A_b[index_b, :]``) with ``rows`` in the full
+            measurement coordinates.
+        """
         index = _validate_index(index, 'row index', self.device, self.batch_size)
         matrix = _take(self.matrix, index, self.matrix.ndim - 2, self.batch_size is not None)
         return self._with_matrix(matrix, rows=self._subset_rows(index))
 
     def select_columns(self, index):
-        """Operator of the sources ``index``: ``A[:, index]`` (per problem: ``A_b[:, index_b]``)."""
+        """Select sources; the measurement rows stay unchanged.
+
+        Parameters
+        ----------
+        index : Tensor
+            Source indices, shared ``(k,)`` or per problem ``(B, k)``.
+
+        Returns
+        -------
+        MatrixMult
+            ``A[:, index]`` (per problem ``A_b[:, index_b]``).
+        """
         index = _validate_index(index, 'column index', self.device, self.batch_size)
         matrix = _take(self.matrix, index, self.matrix.ndim - 1, self.batch_size is not None)
         return self._with_matrix(matrix, rows=self.rows)  # measurement rows are unchanged
@@ -160,6 +242,20 @@ class HermitianVectorization(nn.Module):
     With ``r_diag=True`` the diagonal is dropped (``m = c (c - 1)``); the
     adjoint then returns a zero diagonal. Without it, ``m = c**2``.
     Index buffers move with ``.to(device)``; weights use the input dtype.
+
+    Parameters
+    ----------
+    num_mics : int
+        Number of microphones ``c``.
+    r_diag : bool, optional
+        If True, drop the diagonal (default False).
+
+    Attributes
+    ----------
+    num_measurements : int
+        Length ``m`` of the vectorization.
+    num_real : int
+        Number of leading real entries.
     """
 
     def __init__(self, num_mics, r_diag=False):
@@ -182,12 +278,34 @@ class HermitianVectorization(nn.Module):
         return torch.where(diagonal, reference.new_tensor(1.0), reference.new_tensor(math.sqrt(2.0)))
 
     def row_weights(self, reference):
-        """Weights relating an unweighted (current Acoular) vector to ``hvec``: ``hvec = w * vec``."""
+        """Return the weights ``w`` relating Acoular's unweighted vector to ``hvec = w * vec``.
+
+        Parameters
+        ----------
+        reference : Tensor
+            Tensor whose dtype and device the weights take.
+
+        Returns
+        -------
+        Tensor
+            Weights of shape ``(m,)``: 1 for diagonal entries, ``sqrt(2)`` otherwise.
+        """
         imag = reference.new_full((self.num_measurements - self.num_real,), math.sqrt(2.0))
         return torch.cat((self._real_weights(reference), imag))
 
     def forward(self, real, imag):
-        """``hvec``: ``(..., c, c)`` real/imaginary parts -> ``(..., m)``. Hermitian symmetry is assumed."""
+        """Vectorize Hermitian matrices; Hermitian symmetry is assumed, not checked.
+
+        Parameters
+        ----------
+        real, imag : Tensor
+            Real (symmetric) and imaginary (antisymmetric) parts of shape ``(..., c, c)``.
+
+        Returns
+        -------
+        Tensor
+            ``hvec(S)`` of shape ``(..., m)``.
+        """
         return torch.cat(
             (
                 real[..., self.real_i, self.real_j] * self._real_weights(real),
@@ -197,10 +315,20 @@ class HermitianVectorization(nn.Module):
         )
 
     def adjoint(self, vector):
-        """``hvec*``: ``(..., m)`` -> Hermitian real/imaginary parts ``(..., c, c)``.
+        """Apply the adjoint ``hvec*``, the inverse on Hermitian matrices.
 
         Off-diagonal entries ``v / sqrt(2)`` are placed at ``(i, j)`` and mirrored to
         ``(j, i)`` (imaginary part with flipped sign); diagonal entries are ``v``.
+
+        Parameters
+        ----------
+        vector : Tensor
+            Vectors of shape ``(..., m)``.
+
+        Returns
+        -------
+        real, imag : Tensor
+            Real and imaginary parts of shape ``(..., c, c)``.
         """
         shape = (*vector.shape[:-1], self.num_mics, self.num_mics)
         real = vector.new_zeros(shape)
@@ -245,10 +373,24 @@ class _AuxiliaryPropagationOperator(LinearOperator):
 
 
 class CMFPropagation(LinearOperator):
-    """Matrix-free CMF using a complex propagation matrix ``H``, ``(c, n)`` or ``(B, c, n)``.
+    """Matrix-free CMF operator ``x -> hvec(H diag(x) H^H)`` of a propagation matrix.
 
     Inputs and outputs of the operator are real. ``mics`` and ``rows`` map a
     subset to the original microphone and measurement coordinates.
+
+    Parameters
+    ----------
+    H : Tensor
+        Complex propagation matrix, shared ``(c, n)`` or per problem ``(B, c, n)``.
+    r_diag : bool, optional
+        If True, omit the CSM diagonal (default False).
+
+    Attributes
+    ----------
+    hvec : HermitianVectorization
+        Vectorization of the active microphones.
+    mics : Tensor or None
+        Indices of the active microphones in the full array; None for all.
     """
 
     def __init__(self, H, r_diag=False):
@@ -266,12 +408,12 @@ class CMFPropagation(LinearOperator):
         self.rows = self.mics = None
 
     def forward(self, x):
-        """``hvec(H diag(x) H^H)`` without forming ``diag(x)`` or the dictionary."""
+        """Apply ``A x = hvec(H diag(x) H^H)`` without forming ``diag(x)`` or the dictionary."""
         csm = (self.H * x.unsqueeze(-2)) @ self.H.mH
         return self.hvec(csm.real, csm.imag)
 
     def adjoint(self, r):
-        """``Re(diag(H^H hvec*(r) H))`` via column-wise inner products."""
+        """Apply ``A^T r = Re(diag(H^H hvec*(r) H))`` via column-wise inner products."""
         real, imag = self.hvec.adjoint(r)
         csm = torch.complex(real, imag)
         return (self.H.conj() * (csm @ self.H)).real.sum(-2)
@@ -289,12 +431,36 @@ class CMFPropagation(LinearOperator):
         return op
 
     def select_columns(self, index):
-        """Select source columns, shared or per problem; measurement rows stay fixed."""
+        """Select sources; the measurement rows stay unchanged.
+
+        Parameters
+        ----------
+        index : Tensor
+            Source indices, shared ``(k,)`` or per problem ``(B, k)``.
+
+        Returns
+        -------
+        CMFPropagation
+            Operator of the selected columns of ``H``.
+        """
         index = _validate_index(index, 'column index', self.device, self.batch_size)
         return self._with_propagation(_take(self.H, index, self.H.ndim - 1, self.H.ndim == 3))
 
     def select_mics(self, index):
-        """Keep the CSM block of selected microphones in ascending local index order."""
+        """Keep the CSM block of the selected microphones.
+
+        The block keeps ascending order; ``mics`` and ``rows`` refer to the full array.
+
+        Parameters
+        ----------
+        index : Tensor
+            Local microphone indices, shared ``(k,)`` or per problem ``(B, k)``.
+
+        Returns
+        -------
+        CMFPropagation
+            Operator of the subarray.
+        """
         index = _validate_index(index, 'microphone index', self.device, self.batch_size).sort(dim=-1).values
         op = self._with_propagation(_take(self.H, index, self.H.ndim - 2, self.H.ndim == 3))
         op.mics = index if self.mics is None else _take(self.mics, index, self.mics.ndim - 1, self.mics.ndim == 2)
@@ -307,10 +473,20 @@ class CMFPropagation(LinearOperator):
         return op
 
     def transformed(self, Br):
-        """Build the operator of ``Br @ H`` (complex ``Br`` in the current microphone coordinates).
+        """Build the operator of the transformed propagation matrix ``Br @ H``.
 
-        With ``r_diag=True``, discard the diagonal *after* the transformation.
+        With ``r_diag=True``, the diagonal is discarded *after* the transformation.
         This is not a congruence of the zero-diagonal CSM.
+
+        Parameters
+        ----------
+        Br : Tensor
+            Complex ``(c, c)`` or ``(B, c, c)`` matrix in the current microphone coordinates.
+
+        Returns
+        -------
+        CMFPropagation
+            Operator of ``Br @ H`` with unchanged ``rows`` and ``mics``.
         """
         return self._with_propagation(Br @ self.H)
 
@@ -320,6 +496,22 @@ class CMFDictionary(MatrixMult):
 
     Microphone and source selection preserve the CMF representation. Arbitrary
     row selection returns a ``MatrixMult`` with the original row indices.
+
+    Parameters
+    ----------
+    H : Tensor
+        Complex propagation matrix, shared ``(c, n)`` or per problem ``(B, c, n)``.
+    r_diag : bool, optional
+        If True, omit the CSM diagonal (default False).
+
+    Attributes
+    ----------
+    matrix : Tensor
+        The dense dictionary of the active rows.
+    hvec : HermitianVectorization
+        Vectorization of the active microphones.
+    mics : Tensor or None
+        Indices of the active microphones in the full array; None for all.
     """
 
     def __init__(self, H, r_diag=False):
@@ -351,16 +543,51 @@ class CMFDictionary(MatrixMult):
         return self._derived(self._propagation.detached(), self.matrix.detach())
 
     def select_columns(self, index):
-        """Select source columns from both ``H`` and the stored dictionary."""
+        """Select sources from both ``H`` and the stored dictionary.
+
+        Parameters
+        ----------
+        index : Tensor
+            Source indices, shared ``(k,)`` or per problem ``(B, k)``.
+
+        Returns
+        -------
+        CMFDictionary
+            Dictionary of the selected columns.
+        """
         propagation = self._propagation.select_columns(index)
         # MatrixMult selects the same columns from the cached dictionary. Reuse its
         # matrix so the new CMFDictionary need not rebuild it from the selected H.
         return self._derived(propagation, super().select_columns(index).matrix)
 
     def select_mics(self, index):
-        """Build the dictionary of the selected microphone block."""
+        """Build the dictionary of the selected microphone block.
+
+        See :meth:`CMFPropagation.select_mics`.
+
+        Parameters
+        ----------
+        index : Tensor
+            Local microphone indices, shared ``(k,)`` or per problem ``(B, k)``.
+
+        Returns
+        -------
+        CMFDictionary
+            Dictionary of the subarray.
+        """
         return self._derived(self._propagation.select_mics(index))
 
     def transformed(self, Br):
-        """Build the dictionary of ``Br @ H``, dropping the diagonal afterwards if requested."""
+        """Build the dictionary of ``Br @ H``, see :meth:`CMFPropagation.transformed`.
+
+        Parameters
+        ----------
+        Br : Tensor
+            Complex ``(c, c)`` or ``(B, c, c)`` matrix in the current microphone coordinates.
+
+        Returns
+        -------
+        CMFDictionary
+            Dictionary of ``Br @ H``.
+        """
         return self._derived(self._propagation.transformed(Br))

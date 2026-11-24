@@ -104,19 +104,33 @@ diagonal-removal setting, and off-diagonal weights (the source repo uses
 - `IntermediateOutputCollector`: intermediate iterates with their autograd
   graphs, automatically cleared on iteration zero. With `t=0`, no callbacks run.
 
-ISTA and FISTA have no trainable parameters. Gradients can flow through `y`, `x0`,
-`lam`, and `gamma`; the operator is treated as fixed and detached. Use `torch.no_grad()`
-for inference if no graph is needed.
+ISTA and FISTA have no trainable parameters. Gradients flow through `y`, `x0`, `lam`,
+and `gamma`; the operator is detached. Use `torch.no_grad()` for inference.
 
-The classical call interface is
-`forward(y, x0=None, t=1, operator=None, lam=None, gamma=None)`.
-It does not accept an independent gradient weight `W`, including `W=None`.
-Later unfolded models can override `forward` to expose or construct their own
-weights and reuse the protected preparation/iteration hooks. Weighted updates
-are not classical ISTA/FISTA; their step-size guarantees need separate treatment.
+## Unfolded models
 
-Only normalized least squares is supported. The old `ls_mode` argument and
-TLS implementation have been removed; do not pass `ls_mode`, even `'ls'`.
+| Model | Learned weights | Operator |
+| --- | --- | --- |
+| `AdaLFISTASW` / `NA_AdaLFISTASW` | `B` (`m × m`) | any |
+| `AdaLFISTA` / `NA_AdaLFISTA` | `B1`, `B2` (`m × m`) | any |
+| `AdaLFISTASWR` / `NA_AdaLFISTASWR` | complex `Br` (`c × c`) | CMF |
+| `AdaLFISTAR` / `NA_AdaLFISTAR` | complex `Br1`, `Br2` (`c × c`) | CMF |
+
+`AdaLFISTA*` learn one `gamma`/`theta` per iteration; `NA_AdaLFISTA*` predict them per
+sample with an LSTM. Weights start at the identity, which reproduces FISTA.
+Constructors are keyword-only:
+
+```python
+from ucmf import NA_AdaLFISTASW
+
+model = NA_AdaLFISTASW(num_measurements=m, gamma_init=0.3, theta_init=0.01)
+model.init_normalizers(y, operator)  # once, before solving with NA models
+x = model(y, operator=operator, t=10)
+```
+
+For subsets, use `operator.select_rows(...)` or `select_mics(...)` and align `y` with
+`operator.rows`. `compile_unrolled(model, t_max)` compiles once for all depths. See the
+[architecture guide](docs/architecture.md).
 
 ## Acoular integration
 
@@ -532,17 +546,8 @@ including both input batches and any captured graphs. Solutions and, where appli
 
 </details>
 
-## Extending the iteration
+## Extending and testing
 
-ISTA and FISTA use explicit loops with local variables. There are no state or
-context dataclasses, iteration runner, or `nonlocal` momentum updates.
-Subclasses reuse the gradient/proximal and callback helpers. Learned FISTA
-steps can use `_iterate_accelerated(..., step_params_fn=...)`; recurrent models
-can implement their own loop with local hidden/cell tensors.
-
-See the [architecture guide](docs/architecture.md) for extension examples.
-The earlier state-framework hooks are removed. Stateless tensor/operator helpers live in
-`src/ucmf/optim/utils.py` and are imported directly, not exposed as class aliases.
-
-See [migration notes](docs/migration.md) for scope, provenance, and the later
-CMF-model migration boundary.
+Loops are explicit; subclasses reuse the protected preparation, gradient, and callback
+helpers ([architecture guide](docs/architecture.md)). Shared model properties are tested
+once via pytest-cases in `tests/cases/`. See the [migration notes](docs/migration.md) for FA2026.
