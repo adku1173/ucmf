@@ -17,9 +17,9 @@ def _active_weight(operator, B):
     """Restrict ``B`` to the original rows represented by the operator."""
     validate_tensor(B, name='B', dtype=operator.dtype, device=operator.device)
     m, _ = operator.shape
-    num_msms_total = m if operator.rows is None else operator._num_msms_total
-    if num_msms_total is not None and num_msms_total != B.shape[0]:
-        raise ValueError(f'operator has {num_msms_total} measurements in total but B expects {B.shape[0]}.')
+    num_measurements_total = m if operator.rows is None else operator._num_measurements_total
+    if num_measurements_total is not None and num_measurements_total != B.shape[0]:
+        raise ValueError(f'operator has {num_measurements_total} measurements in total but B expects {B.shape[0]}.')
     if operator.rows is None:
         return B
     rows = _validate_index(operator.rows, 'operator.rows', operator.device, operator.batch_size)
@@ -31,7 +31,29 @@ def _active_weight(operator, B):
 
 
 def make_weight_operator(operator, B, weight_mode='factored'):
-    """Build ``B_active @ A`` as a composition or precompute its dense product."""
+    """Build the effective weight operator ``W = B_active @ A``.
+
+    Parameters
+    ----------
+    operator : LinearOperator
+        Detached measurement operator ``A``; its ``rows`` select ``B_active = B[rows, rows]``.
+    B : Tensor
+        Auxiliary ``(m, m)`` weight in the full measurement coordinates.
+    weight_mode : {'factored', 'precomputed'}, optional
+        ``'factored'`` (default) composes ``B_active`` and ``A``; ``'precomputed'``
+        forms the dense product and requires a ``MatrixMult`` or ``CMFDictionary``.
+
+    Returns
+    -------
+    LinearOperator
+        Operator applying ``W`` and ``W.T``, differentiable in ``B``.
+
+    Raises
+    ------
+    ValueError
+        If ``B`` or ``operator.rows`` do not fit the operator, or ``'precomputed'``
+        is requested for a matrix-free operator.
+    """
     if weight_mode == 'precomputed':
         if not isinstance(operator, MatrixMult):
             raise ValueError("weight_mode='precomputed' requires a dense MatrixMult or CMFDictionary operator.")
@@ -40,18 +62,46 @@ def make_weight_operator(operator, B, weight_mode='factored'):
     return _AuxiliaryOperator(operator, MatrixMult(_active_weight(operator, B)))
 
 
-def validate_cmf_operator(operator, n_mics, r_diag):
-    """Require compatible CMF coordinates for a reduced auxiliary weight."""
+def validate_cmf_operator(operator, num_mics, r_diag):
+    """Require compatible CMF coordinates for a reduced auxiliary weight.
+
+    Parameters
+    ----------
+    operator : LinearOperator
+        Measurement operator to check.
+    num_mics : int
+        Number of microphones of the full array spanned by ``Br``.
+    r_diag : bool
+        Diagonal setting of the model.
+
+    Raises
+    ------
+    ValueError
+        If ``operator`` is not a CMF operator or its array size or diagonal setting differ.
+    """
     if not isinstance(operator, (CMFDictionary, CMFPropagation)):
         raise ValueError('operator must be a CMFDictionary or CMFPropagation.')
     if operator.r_diag != r_diag:
         raise ValueError('operator.r_diag must match model.r_diag.')
-    if operator._num_mics_total != n_mics:
-        raise ValueError(f'operator has {operator._num_mics_total} microphones in total but Br expects {n_mics}.')
+    if operator._num_mics_total != num_mics:
+        raise ValueError(f'operator has {operator._num_mics_total} microphones in total but Br expects {num_mics}.')
 
 
 def make_propagation_weight_operator(operator, Br_re, Br_im):
-    """Compose the fixed CMF operator with a learned weight on its active microphones."""
+    """Compose the fixed CMF operator with a learned congruence on its active microphones.
+
+    Parameters
+    ----------
+    operator : CMFDictionary or CMFPropagation
+        Detached measurement operator ``A``; its ``mics`` select ``Br[mics, mics]``.
+    Br_re, Br_im : Tensor
+        Real and imaginary parts of the full ``(c, c)`` auxiliary propagation matrix.
+
+    Returns
+    -------
+    LinearOperator
+        Operator applying ``W = B A`` and ``W.T``, with ``B v = hvec(Br hvec*(v) Br^H)``.
+    """
     validate_tensor(Br_re, name='Br_re', dtype=operator.dtype, device=operator.device)
     validate_tensor(Br_im, name='Br_im', dtype=operator.dtype, device=operator.device)
     Br = torch.complex(Br_re, Br_im)
@@ -62,9 +112,19 @@ def make_propagation_weight_operator(operator, Br_re, Br_im):
 
 
 def apply_auxiliary_weight(B, A_tensor):
-    """Form the effective weight from the auxiliary weight ``B``: ``W = B @ A``.
+    """Form the dense effective weight ``W = B @ A``.
 
-    Handles shared or per-sample ``B`` and shared or batched ``A``.
+    Parameters
+    ----------
+    B : Tensor
+        Shared ``(p, m)`` or per-sample ``(b, p, m)`` auxiliary weight.
+    A_tensor : Tensor
+        Shared ``(m, n)`` or batched ``(b, m, n)`` matrix.
+
+    Returns
+    -------
+    Tensor
+        ``(p, n)`` for shared inputs, otherwise ``(b, p, n)``.
     """
     if B.ndim == 3:
         # Per-sample B: W_b = B_b @ A_b, (b, p, m) @ (b, m, n) -> (b, p, n).

@@ -5,7 +5,6 @@ from types import SimpleNamespace
 from ucmf import FISTA, ISTA
 from ucmf.optim import (
     IntermediateOutputCollector,
-    IterationCallback,
     SolutionChangeStopper,
     StepParamCollector,
 )
@@ -18,7 +17,7 @@ import torch
 @pytest.mark.parametrize('solver_type', [ISTA, FISTA])
 def test_default_step_and_threshold_use_normalized_objective(solver_type):
     collector = StepParamCollector()
-    solver = solver_type(positive=False, callbacks=[collector])
+    solver = solver_type(nonnegative=False, callbacks=[collector])
     A = torch.tensor([[1.0, 0.0], [0.0, 2.0], [0.0, 0.0]])
 
     solver(torch.zeros(1, 3), operator=MatrixMult(A), lam=0.2, t=1)
@@ -64,52 +63,16 @@ def test_step_collector_detaches_and_copies_parameters():
 
 
 @pytest.mark.parametrize('solver_type', [ISTA, FISTA])
-def test_callbacks_receive_ordered_iterations_and_classical_adjoint(solver_type):
-    events = []
+def test_classical_callbacks_receive_operator_as_weight_and_fixed_step_parameters(solver_type, recorder):
+    """Order, detached operator, and y are tested for all models in test_models."""
     A = torch.eye(2, requires_grad=True)
-    y = torch.ones(1, 2)
-
-    class Recorder(IterationCallback):
-        def on_step_begin(self, solver, x, **kwargs):
-            events.append(('begin', solver.iter))
-
-        def on_step_end(self, solver, x, **kwargs):
-            events.append(('end', solver.iter))
-            operator = kwargs['A']
-            assert isinstance(operator, MatrixMult) and kwargs['W'] is operator
-            torch.testing.assert_close(operator.matrix, A)
-            assert not operator.matrix.requires_grad
-            torch.testing.assert_close(kwargs['y'], y)
-            torch.testing.assert_close(solver.y, y)
-            assert kwargs['gamma'] == 0.2
-            assert kwargs['theta'] == pytest.approx(0.02)
-
-    solver_type(callbacks=[Recorder()])(y, operator=MatrixMult(A), lam=0.1, gamma=0.2, t=3)
-    assert events == [(event, k) for k in range(3) for event in ('begin', 'end')]
-
-
-@pytest.mark.parametrize('solver_type', [ISTA, FISTA])
-@pytest.mark.parametrize('stop_at', ['begin', 'end'])
-def test_custom_callbacks_can_stop_at_either_boundary(solver_type, stop_at):
-    outputs = IntermediateOutputCollector()
-
-    class Stop(IterationCallback):
-        def on_step_begin(self, solver, x, **kwargs):
-            if stop_at == 'begin':
-                solver.stop = True
-
-        def on_step_end(self, solver, x, **kwargs):
-            if stop_at == 'end':
-                solver.stop = True
-
-    # gamma = m / ||A||_2**2 = 2: one step solves A = I exactly.
-    actual = solver_type(callbacks=[Stop(), outputs])(
-        torch.ones(2), operator=MatrixMult(torch.eye(2)), lam=0.0, gamma=2.0, t=8,
-    )
-
-    completed = 0 if stop_at == 'begin' else 1
-    assert len(outputs.intermediates) == completed
-    torch.testing.assert_close(actual, torch.full((1, 2), float(completed)))
+    solver_type(callbacks=[recorder])(torch.ones(1, 2), operator=MatrixMult(A), lam=0.1, gamma=0.2, t=3)
+    for kwargs in recorder.end_kwargs:
+        operator = kwargs['A']
+        assert isinstance(operator, MatrixMult) and kwargs['W'] is operator
+        torch.testing.assert_close(operator.matrix, A)
+        assert kwargs['gamma'] == 0.2
+        assert kwargs['theta'] == pytest.approx(0.02)
 
 
 @pytest.mark.parametrize('solver_type', [ISTA, FISTA])
@@ -123,13 +86,13 @@ def test_stopper_converges_and_resets_between_solves(solver_type):
     torch.testing.assert_close(x, torch.ones(2, 3))
     assert stopper.converged
     assert stopper.stop_iter == 1
-    assert stopper.n_steps == 2
+    assert stopper.num_steps == 2
     assert len(outputs.intermediates) == 2
 
     solver(torch.zeros(2, 3), operator=MatrixMult(torch.eye(3)), lam=0.0, gamma=3.0, t=100)
     assert stopper.converged
     assert stopper.stop_iter == 0
-    assert stopper.n_steps == 1
+    assert stopper.num_steps == 1
     assert len(outputs.intermediates) == 1
 
 
@@ -140,14 +103,14 @@ def test_stopper_checks_only_every_check_every_steps(solver_type):
     solver(torch.ones(2, 3), operator=MatrixMult(torch.eye(3)), lam=0.0, gamma=3.0, t=100)
     assert stopper.converged
     assert stopper.stop_iter == 4
-    assert stopper.n_steps == 5
+    assert stopper.num_steps == 5
 
     stopper = SolutionChangeStopper(tol=1e-9, check_every=5)
     solver = solver_type(callbacks=[stopper])
     solver(torch.ones(2, 3), operator=MatrixMult(torch.eye(3)), lam=0.0, gamma=3.0, t=3)
     assert not stopper.converged
     assert stopper.last_change is None
-    assert stopper.n_steps == 3
+    assert stopper.num_steps == 3
 
 
 def test_relative_stopping_requires_every_sample_to_converge():
@@ -168,7 +131,7 @@ def test_relative_stopping_requires_every_sample_to_converge():
     stopper.on_step_end(solver, after.clone())
     assert solver.stop
     assert stopper.converged
-    assert stopper.n_steps == 2
+    assert stopper.num_steps == 2
 
 
 def test_absolute_stopping_and_zero_solution_are_finite():
@@ -187,18 +150,3 @@ def test_absolute_stopping_and_zero_solution_are_finite():
     torch.testing.assert_close(relative.last_change, torch.zeros(2))
 
 
-@pytest.mark.parametrize('solver_type', [ISTA, FISTA])
-def test_intermediate_outputs_keep_autograd_graph_and_reset(solver_type):
-    collector = IntermediateOutputCollector()
-    solver = solver_type(callbacks=[collector])
-    y = torch.ones(1, 2, requires_grad=True)
-    solver(y, operator=MatrixMult(torch.eye(2)), gamma=0.5, lam=0.0, t=4)
-    assert len(collector.intermediates) == 4
-    assert all(x.requires_grad for x in collector.intermediates)
-    sum(x.square().sum() for x in collector.intermediates).backward()
-    assert y.grad is not None and torch.all(y.grad > 0)
-
-    solver(y.detach(), operator=MatrixMult(torch.eye(2)), lam=0.0, t=2)
-    assert len(collector.intermediates) == 2
-    collector.reset()
-    assert collector.intermediates == []

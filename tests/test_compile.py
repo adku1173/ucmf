@@ -4,23 +4,25 @@ from ucmf import AdaLFISTASW
 from ucmf.optim import IterationCallback, compile_unrolled
 from ucmf.optim.operator import CMFPropagation, MatrixMult
 
+from cases.models import ModelCases, T, build_model, perturb_weights
+from cases.problems import NUM_MICS, NUM_SOURCES
+
 import pytest
 import torch
 from pytest_cases import parametrize_with_cases
-from unfolded_model_cases import N_MICS, N_SOURCES, T, UnfoldedModelCases, build_model, perturb_weights
 
 
-@parametrize_with_cases('make_model, dense_weights', cases=UnfoldedModelCases)
-def test_compiled_model_matches_eager_with_changing_mic_subsets(make_model, dense_weights):
+@parametrize_with_cases('spec', cases=ModelCases, has_tag='unfolded')
+def test_compiled_model_matches_eager_with_changing_mic_subsets(spec):
     """Training scenario: per-problem microphone subsets and propagation matrices change per batch."""
     rng = torch.Generator().manual_seed(8)
-    model = perturb_weights(build_model(make_model, r_diag=True))
+    model = perturb_weights(build_model(spec, r_diag=True))
     compiled = compile_unrolled(model, T, mode='default')
     params = tuple(model.parameters())
-    y_full = torch.randn(2, N_MICS * (N_MICS - 1), dtype=torch.float64, generator=rng)
+    y_full = torch.randn(2, NUM_MICS * (NUM_MICS - 1), dtype=torch.float64, generator=rng)
 
     for mics in ([[0, 1, 2], [0, 2, 3]], [[1, 2, 3], [0, 1, 3]]):
-        H = torch.randn(2, N_MICS, N_SOURCES, dtype=torch.complex128, generator=rng)
+        H = torch.randn(2, NUM_MICS, NUM_SOURCES, dtype=torch.complex128, generator=rng)
         operator = CMFPropagation(H, r_diag=True).select_mics(torch.tensor(mics))
         y = y_full.gather(1, operator.rows)
         actual = compiled(y, operator=operator)
@@ -33,25 +35,19 @@ def test_compiled_model_matches_eager_with_changing_mic_subsets(make_model, dens
             torch.testing.assert_close(grad, reference, rtol=1e-10, atol=1e-12)
 
 
-def test_returns_all_iterates_and_restores_callbacks():
-    model = AdaLFISTASW(T, 6, 0.3, 0.01).double()
+def test_returns_all_iterates_and_restores_callbacks(recorder):
+    model = AdaLFISTASW(num_iterations=T, num_measurements=6, gamma_init=0.3, theta_init=0.01).double()
     compiled = compile_unrolled(model, T, mode='default')
-    seen = []
-
-    class Counter(IterationCallback):
-        def on_step_end(self, solver, x, **kwargs):
-            seen.append(1)
-
-    own = [Counter()]
+    own = [recorder]
     model.callbacks = own
     out = compiled(torch.randn(3, 6, dtype=torch.float64), operator=MatrixMult(torch.randn(6, 4, dtype=torch.float64)))
     assert out.shape == (T, 3, 4)
-    assert len(seen) == T  # the model's own callbacks stay active
+    assert len(recorder.end_kwargs) == T  # the model's own callbacks stay active
     assert model.callbacks == own  # the collector is removed again
 
 
 def test_restores_callbacks_when_solve_raises():
-    model = AdaLFISTASW(T, 6, 0.3, 0.01)
+    model = AdaLFISTASW(num_iterations=T, num_measurements=6, gamma_init=0.3, theta_init=0.01)
     model.callbacks = own = [IterationCallback()]
     compiled = compile_unrolled(model, T, mode='default')
     operator = MatrixMult(torch.ones(6, 4))

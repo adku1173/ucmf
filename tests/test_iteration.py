@@ -1,66 +1,33 @@
 """Explicit loops retain scheduling, recurrent autograd, and callback behavior."""
 
 from ucmf import FISTA, ISTA
-from ucmf.optim import IntermediateOutputCollector, IterationCallback
+from ucmf.optim import IntermediateOutputCollector
 from ucmf.optim.operator import MatrixMult
+
+from helpers import StopAt, reference_iterates, scheduled_step_params
 
 import pytest
 import torch
 
 
-def scheduled_reference(A, y, x0, gammas, thetas, *, accelerated, x_shift=0.0):
-    """Independent textbook loop, including an optional begin-callback change."""
-    x = x0.clone()
-    z = x0.clone()
-    tk = 1.0
-    for gamma, theta in zip(gammas, thetas, strict=True):
-        previous = x + x_shift
-        point = z if accelerated else previous
-        proposal = point + gamma * ((y - point @ A.T) @ A) / y.shape[1]
-        next_x = proposal.sign() * (proposal.abs() - theta).clamp_min(0)
-        if accelerated:
-            next_tk = (1 + (1 + 4 * tk**2) ** 0.5) / 2
-            z = next_x + (tk - 1) / next_tk * (next_x - previous)
-            tk = next_tk
-        x = next_x
-    return x
-
-
-@pytest.mark.parametrize('solver_type', [ISTA, FISTA])
-def test_loop_keeps_warm_start_unchanged_and_resets_between_solves(solver_type):
-    solver = solver_type(positive=False)
-    A = torch.tensor([[1.0, 0.2], [0.1, 1.3]], dtype=torch.float64)
-    y = torch.tensor([[1.0, 0.5]], dtype=A.dtype)
-    x0 = torch.tensor([[0.3, 0.1]], dtype=A.dtype, requires_grad=True)
-    saved = x0.detach().clone()
-    expected = scheduled_reference(A, y, x0, [0.2] * 9, [0.002] * 9, accelerated=solver_type is FISTA)
-    operator = MatrixMult(A)
-    first = solver(y, x0=x0, operator=operator, gamma=0.2, lam=0.01, t=9)
-    second = solver(y, x0=x0, operator=operator, gamma=0.2, lam=0.01, t=9)
-
-    torch.testing.assert_close(first, expected)
-    torch.testing.assert_close(first, second, rtol=0, atol=0)
-    torch.testing.assert_close(x0, saved)
-    assert first.data_ptr() != x0.data_ptr()
-    first.sum().backward()
-    first_grad = x0.grad.clone()
-    x0.grad = None
-    second.sum().backward()
-    torch.testing.assert_close(x0.grad, first_grad)
+def scheduled_reference(A, y, x0, gammas, thetas, *, accelerated):
+    """Final iterate of the shared dense reference with the classical direction."""
+    step_params = scheduled_step_params(gammas, thetas)
+    return reference_iterates(A, A, A, A, y, x0, len(gammas), step_params, accelerated=accelerated)[-1]
 
 
 class ScheduledFISTA(FISTA):
     """Test-only ALFISTA-style subclass, not a migrated production model."""
 
     def __init__(self, callbacks=None):
-        super().__init__(positive=False, callbacks=callbacks)
+        super().__init__(nonnegative=False, callbacks=callbacks)
         self.gammas = torch.nn.Parameter(torch.tensor([0.1, 0.3, 0.2], dtype=torch.float64))
         self.thetas = torch.nn.Parameter(torch.tensor([0.01, 0.02, 0.015], dtype=torch.float64))
 
     def forward(self, y, x0=None, t=1, operator=None):
-        y, x0, operator, _ = self._prepare_operator_inputs(y, x0, operator)
+        y, x0, operator = self._prepare_operator_inputs(y, x0, operator)
         return self._iterate_accelerated(
-            y, x0, operator.shape[1], t, self._step_params,
+            y, x0, t, self._step_params,
             gradient=self._make_gradient(y, operator, operator),
             callback_metadata={'A': operator, 'W': operator, 'y': y},
         )
@@ -96,19 +63,19 @@ def test_own_recurrent_loop_keeps_graphs_and_resets_local_hidden_state(solver_ty
 
     class RecurrentSolver(solver_type):
         def __init__(self):
-            super().__init__(positive=False)
+            super().__init__(nonnegative=False)
             self.gain = torch.nn.Parameter(torch.tensor(0.2, dtype=torch.float64))
 
-        def _iterate(self, y, x0, n_sources, gamma, theta, t, *, gradient, callback_metadata):
+        def _iterate(self, y, x0, gamma, theta, t, *, gradient, callback_metadata):
             shrink_func = self.get_shrink_func()
-            x = self._init_solver_vector(y, x0, n_sources)
-            z = self._init_solver_vector(y, x0, n_sources) if solver_type is FISTA else x
+            x = x0.clone()
+            z = x0.clone() if solver_type is FISTA else x
             tk = 1.0
             hidden = y.new_zeros(y.shape[0], 1)
             cell = y.new_zeros(y.shape[0], 1)
             lam = theta / gamma
 
-            self._start_iterations(y)
+            self._start_iterations()
             for k in range(t):
                 if not self._on_iteration_begin(k, x):
                     break
@@ -156,11 +123,7 @@ def test_schedule_only_runs_for_executed_steps():
             calls.append(k)
             return super()._step_params(k)
 
-    class Stop(IterationCallback):
-        def on_step_begin(self, solver, x, **kwargs):
-            solver.stop = solver.iter == 2
-
-    solver = RecordingSchedule(callbacks=[Stop()])
+    solver = RecordingSchedule(callbacks=[StopAt(2, 'begin')])
     y = torch.ones(2, dtype=torch.float64)
     for steps in (5, 0, 5):
         solver(y, operator=MatrixMult(torch.eye(2, dtype=y.dtype)), t=steps)
@@ -175,8 +138,8 @@ def test_existing_momentum_hook_can_disable_acceleration():
     A = torch.tensor([[1.0, 0.2], [0.3, 1.3]])
     y = torch.tensor([[1.0, 0.5]])
     operator = MatrixMult(A)
-    expected = ISTA(positive=False)(y, operator=operator, lam=0.01, gamma=0.2, t=9)
-    actual = UnacceleratedFISTA(positive=False)(y, operator=operator, lam=0.01, gamma=0.2, t=9)
+    expected = ISTA(nonnegative=False)(y, operator=operator, lam=0.01, gamma=0.2, t=9)
+    actual = UnacceleratedFISTA(nonnegative=False)(y, operator=operator, lam=0.01, gamma=0.2, t=9)
     torch.testing.assert_close(actual, expected)
 
 
@@ -195,9 +158,9 @@ def test_gradient_and_callback_hooks_are_dispatched(solver_type):
 
             return scaled_gradient
 
-        def _start_iterations(self, y):
+        def _start_iterations(self):
             seen.append('start')
-            super()._start_iterations(y)
+            super()._start_iterations()
 
         def _on_iteration_begin(self, k, x):
             seen.append('begin')
@@ -216,19 +179,3 @@ def test_gradient_and_callback_hooks_are_dispatched(solver_type):
     assert seen == ['prepare gradient', 'start'] + ['begin', 'gradient', 'end'] * 3
 
 
-@pytest.mark.parametrize('solver_type', [ISTA, FISTA])
-def test_begin_callbacks_can_adjust_iterates(solver_type):
-    class Shift(IterationCallback):
-        def on_step_begin(self, solver, x, **kwargs):
-            x.add_(0.05)
-
-    A = torch.tensor([[1.0, 0.2], [0.3, 1.3]], dtype=torch.float64)
-    y = torch.tensor([[1.0, 0.5]], dtype=A.dtype)
-    with torch.no_grad():
-        actual = solver_type(positive=False, callbacks=[Shift()])(
-            y, operator=MatrixMult(A), lam=0.01, gamma=0.2, t=5,
-        )
-    expected = scheduled_reference(
-        A, y, torch.zeros_like(y), [0.2] * 5, [0.002] * 5, accelerated=solver_type is FISTA, x_shift=0.05
-    )
-    torch.testing.assert_close(actual, expected)

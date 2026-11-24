@@ -17,90 +17,96 @@ with Nesterov momentum. Neither ``lam`` nor ``gamma`` are passed to
 """
 
 from .ista import FISTA
-from .utils import softplus_inverse, validate_unfolded_iterations
+from .learned_params import LearnedParams
+from .neural_augmentation import NeuralAugmentation
 from .weights import make_weight_operator
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 
 
-class AdaLFISTASW(FISTA):
-    """Single-weight Ada-LFISTA with trainable ``B``, ``gamma`` and ``theta``.
+class _SingleWeight(FISTA):
+    """Update direction ``W.T @ (y - A z) / m`` with ``W = B_active @ A``."""
 
-    Args:
-        n_iterations (int): number of unfolded iterations/layers.
-        n_measurements (int): measurement dimension ``m`` spanned by ``B``.
-        gamma_init (float): initial applied step size for every iteration.
-        theta_init (float): initial applied soft-threshold for every iteration.
-        positive (bool): enforce non-negativity via positive shrinkage.
-        callbacks (list | None): optional solver callbacks.
-        B (Tensor | None): optional ``(m, m)`` init for the auxiliary weight matrix;
-            defaults to the identity, reproducing classical FISTA.
-        weight_mode (str): ``'factored'`` applies ``A.T @ (B.T @ r)`` without
-            forming ``W``. ``'precomputed'`` forms ``W = B @ A`` once per solve
-            and requires a dense ``MatrixMult`` or ``CMFDictionary`` operator.
-    """
-
-    def __init__(
-        self,
-        n_iterations,
-        n_measurements,
-        gamma_init,
-        theta_init,
-        positive=True,
-        callbacks=None,
-        B=None,
-        *,
-        weight_mode='factored',
-    ):
-        super().__init__(positive=positive, callbacks=callbacks)
+    def __init__(self, *, num_measurements, nonnegative=True, callbacks=None, B=None, weight_mode='factored'):
+        super().__init__(nonnegative=nonnegative, callbacks=callbacks)
         if weight_mode not in ('factored', 'precomputed'):
             raise ValueError("weight_mode must be 'factored' or 'precomputed'.")
         self.weight_mode = weight_mode
-        if n_iterations <= 0:
-            raise ValueError(f'n_iterations must be positive, got {n_iterations}')
-        self.n_iterations = n_iterations
-        self.n_measurements = int(n_measurements)
-        if self.n_measurements <= 0:
-            raise ValueError(f'n_measurements must be positive, got {n_measurements}')
+        self.num_measurements = num_measurements
+        if self.num_measurements <= 0:
+            raise ValueError(f'num_measurements must be positive, got {num_measurements}')
 
-        B_tensor = torch.eye(self.n_measurements) if B is None else B.detach().clone()
-        expected_shape = (self.n_measurements, self.n_measurements)
+        B_tensor = torch.eye(self.num_measurements) if B is None else B.detach().clone()
+        expected_shape = (self.num_measurements, self.num_measurements)
         if B_tensor.ndim != 2 or tuple(B_tensor.shape) != expected_shape:
             raise ValueError(f'B must have shape {expected_shape}, got {tuple(B_tensor.shape)}.')
         self.B = nn.Parameter(B_tensor)
 
-        self._gamma = nn.Parameter(torch.full((n_iterations,), float(softplus_inverse(gamma_init))))
-        self._theta = nn.Parameter(torch.full((n_iterations,), float(softplus_inverse(theta_init))))
-
-    @property
-    def gamma(self):
-        """Per-iteration step sizes actually applied (``softplus(_gamma)``)."""
-        return F.softplus(self._gamma)
-
-    @property
-    def theta(self):
-        """Per-iteration soft-thresholds actually applied (``softplus(_theta)``)."""
-        return F.softplus(self._theta)
-
-    def forward(self, y, x0=None, t=1, operator=None):
-        """Run Ada-LFISTA-SW with a fixed measurement operator and learned weights.
-
-        Inputs and model parameters must already share ``y``'s dtype and device.
-        For a subset, ``y`` must follow ``operator.rows`` in the full measurement
-        coordinates of ``B``. Row indices must be in range.
-        """
-        validate_unfolded_iterations(t, self.n_iterations)
-        y, x0, operator, _ = self._prepare_operator_inputs(y, x0, operator)
+    def _prepare_update(self, y, x0, operator):
+        """Detach the operator and bind the weighted update direction for one solve."""
+        y, x0, operator = self._prepare_operator_inputs(y, x0, operator)
         weight_operator = make_weight_operator(operator, self.B, self.weight_mode)
-        # gamma = softplus(_gamma), theta = softplus(_theta): applied once here,
-        # then unbound into per-layer scalars so the loop only does tuple indexing
-        # (no per-layer tensor __getitem__ dispatch). unbind keeps the autograd graph.
-        gammas, thetas = self.gamma.unbind(), self.theta.unbind()
-        return self._iterate_accelerated(
-            y, x0, operator.shape[1], t,
-            step_params_fn=lambda k: (gammas[k], thetas[k]),
-            gradient=self._make_gradient(y, operator, weight_operator),
-            callback_metadata={'A': operator, 'W': weight_operator, 'y': y},
-        )
+        gradient = self._make_gradient(y, operator, weight_operator)
+        residual_gradient = self._make_residual_gradient(y, operator, weight_operator)
+        return y, x0, gradient, residual_gradient, {'A': operator, 'W': weight_operator, 'y': y}
+
+
+class AdaLFISTASW(LearnedParams, _SingleWeight):
+    """Single-weight Ada-LFISTA with trainable ``B``, ``gamma`` and ``theta``.
+
+    All arguments are keyword-only.
+
+    Parameters
+    ----------
+    num_iterations : int
+        Number of unfolded iterations (layers).
+    gamma_init : float
+        Initial applied step size of every iteration.
+    theta_init : float
+        Initial applied soft-threshold of every iteration.
+    num_measurements : int
+        Full measurement dimension ``m`` spanned by ``B``.
+    nonnegative : bool, optional
+        If True (default), constrain the solution to ``x >= 0``.
+    callbacks : list of IterationCallback, optional
+        Solver callbacks; end callbacks get the operators ``A`` and ``W``.
+    B : Tensor, optional
+        Initial ``(m, m)`` auxiliary weight; defaults to the identity, which reproduces FISTA.
+    weight_mode : {'factored', 'precomputed'}, optional
+        ``'factored'`` (default) applies ``A.T @ (B.T @ r)`` without forming ``W``.
+        ``'precomputed'`` forms ``W = B @ A`` once per solve and requires a dense
+        ``MatrixMult`` or ``CMFDictionary`` operator.
+    """
+
+
+class NA_AdaLFISTASW(NeuralAugmentation, _SingleWeight):
+    """NA-Ada-LFISTA-SW: trainable ``B``; an LSTM predicts the step size and threshold.
+
+    Same update direction as :class:`AdaLFISTASW`, but the step size and threshold
+    are predicted per sample and iteration from the residual and direction norms,
+    see :class:`~ucmf.optim.neural_augmentation.NeuralAugmentation`. Any ``t >= 0``
+    is allowed. Call ``init_normalizers`` once before solving. All arguments are
+    keyword-only.
+
+    Parameters
+    ----------
+    gamma_init : float
+        Initial applied step size of the controller readout.
+    theta_init : float
+        Initial applied soft-threshold of the controller readout.
+    lstm_dim : int, optional
+        Hidden size of the LSTM controller (default 128).
+    num_measurements : int
+        Full measurement dimension ``m`` spanned by ``B``.
+    nonnegative : bool, optional
+        If True (default), constrain the solution to ``x >= 0``.
+    callbacks : list of IterationCallback, optional
+        Solver callbacks; end callbacks get the operators ``A`` and ``W``.
+    B : Tensor, optional
+        Initial ``(m, m)`` auxiliary weight; defaults to the identity, which reproduces FISTA.
+    weight_mode : {'factored', 'precomputed'}, optional
+        ``'factored'`` (default) applies ``A.T @ (B.T @ r)`` without forming ``W``.
+        ``'precomputed'`` forms ``W = B @ A`` once per solve and requires a dense
+        ``MatrixMult`` or ``CMFDictionary`` operator.
+    """

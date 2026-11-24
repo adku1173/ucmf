@@ -15,18 +15,21 @@ def compile_unrolled(model, t_max, mode='reduce-overhead'):
     after ``t`` are still computed; they do not change ``x_t`` and contribute
     zero gradient to it.
 
-    Args:
-        model: solver module, e.g. ``AdaLFISTASW``. Its own callbacks must be
-            compilable (no host syncs such as ``.item()``); they stay active.
-        t_max (int): number of iterations of the compiled graph.
-        mode (str): ``torch.compile`` mode; ``'reduce-overhead'`` uses CUDA
-            graphs on GPU.
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Solver, e.g. ``AdaLFISTASW``. Its own callbacks must be compilable (no
+        host syncs such as ``.item()``); they stay active.
+    t_max : int
+        Number of iterations of the compiled graph.
+    mode : str, optional
+        ``torch.compile`` mode; the default ``'reduce-overhead'`` uses CUDA graphs on GPU.
 
     Returns
     -------
-        Callable ``f(y, **forward_kwargs)`` returning a tensor of shape
-        ``(t_max, B, n)``; ``forward_kwargs`` are passed to ``model.forward``
-        (``t`` is set to ``t_max``).
+    callable
+        ``f(y, **forward_kwargs)`` returning a tensor of shape ``(t_max, B, n)``;
+        ``forward_kwargs`` are passed to ``model.forward`` with ``t = t_max``.
     """
     collector = IntermediateOutputCollector()
 

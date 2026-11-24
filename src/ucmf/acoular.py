@@ -70,36 +70,50 @@ class TorchSolver(LeastSquaresSolver):
         return digest(self)
 
     @abstractmethod
-    def _create_solver(self, positive, callbacks):
+    def _create_solver(self, nonnegative, callbacks):
         """Return the ucmf solver module used for one solve."""
 
     def solve(self, problem, dictionary_matrix, data, start_value=None):
         """Solve one frequency bin.
 
-        With :attr:`tol` set, ``info`` reports ``n_steps`` and ``converged``;
-        otherwise it is empty.
+        Parameters
+        ----------
+        problem : L1RegularizedLeastSquaresProblem
+            Problem providing ``alpha``, ``unit_mult`` and ``nonnegative``.
+        dictionary_matrix : numpy.ndarray
+            Scaled dictionary of shape ``(n_data, n_sources)``.
+        data : numpy.ndarray
+            Scaled measurement data of shape ``(n_data,)``.
+        start_value : numpy.ndarray, optional
+            Warm start of shape ``(n_sources,)``.
+
+        Returns
+        -------
+        SolverOutput
+            Solution as a NumPy array. With :attr:`tol` set, ``info`` reports
+            ``num_steps`` and ``converged``; otherwise it is empty.
         """
         dtype = getattr(torch, self.precision)
         operator = MatrixMult(torch.as_tensor(dictionary_matrix, dtype=dtype, device=self.device))
         y = torch.as_tensor(data, dtype=dtype, device=self.device)
         x0 = None if start_value is None else torch.as_tensor(start_value, dtype=dtype, device=self.device)
         stopper = None if self.tol is None else SolutionChangeStopper(tol=self.tol, check_every=self.check_every)
-        solver = self._create_solver(positive=problem.nonnegative, callbacks=[] if stopper is None else [stopper])
+        solver = self._create_solver(nonnegative=problem.nonnegative, callbacks=[] if stopper is None else [stopper])
         with torch.no_grad():
             x = solver(y, x0=x0, t=self.n_iter, operator=operator, lam=problem.alpha * problem.unit_mult)
-        info = {} if stopper is None else {'n_steps': stopper.n_steps, 'converged': stopper.converged}
+        info = {} if stopper is None else {'num_steps': stopper.num_steps, 'converged': stopper.converged}
         return SolverOutput(solution=x[0].cpu().numpy(), info=info)
 
 
 class ISTATorchSolver(TorchSolver):
     """L1-regularized least squares via :class:`ucmf.ISTA`."""
 
-    def _create_solver(self, positive, callbacks):
-        return ISTA(positive=positive, callbacks=callbacks)
+    def _create_solver(self, nonnegative, callbacks):
+        return ISTA(nonnegative=nonnegative, callbacks=callbacks)
 
 
 class FISTATorchSolver(TorchSolver):
     """L1-regularized least squares via :class:`ucmf.FISTA`."""
 
-    def _create_solver(self, positive, callbacks):
-        return FISTA(positive=positive, callbacks=callbacks)
+    def _create_solver(self, nonnegative, callbacks):
+        return FISTA(nonnegative=nonnegative, callbacks=callbacks)

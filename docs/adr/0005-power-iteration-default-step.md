@@ -1,6 +1,8 @@
 # 0005: Default step size from power iteration with a safety factor
 
-Status: Accepted — requested by the author.
+Status: Accepted — requested by the author. `default_gamma_from_A` and
+`estimate_squared_spectral_norm` were later merged into `default_gamma_from_operator`
+(same algorithm, applied through `operator.forward` / `adjoint`).
 
 ## Context
 

@@ -1,6 +1,6 @@
 # 0007: Linear operators instead of sensing matrices
 
-Status: Proposed — requested by the author; open points below.
+Status: Accepted — requested by the author; implemented.
 
 ## Context
 
@@ -34,7 +34,7 @@ Neither representation wins everywhere: dense wins for small CMF problems and
 shared A in eager mode; matrix-free propagation wins compiled at b = 1, for distinct A with
 many microphones, and for per-sample microphone CV.
 
-## Decision (proposal)
+## Decision
 
 1. Solvers and models take an operator instead of `A`:
    `forward(y, x0=None, t=1, operator=None, ...)`. Explicit matrices are
@@ -65,21 +65,10 @@ many microphones, and for per-sample microphone CV.
    the diagonal before congruence and `hvec` drops it afterwards. Transforming
    `H` with `Br` and dropping the diagonal only afterwards is not equivalent.
 
-## Open points
+## Resolved and remaining points
 
-- SW/LFISTA with dense A: precomputed `W = B @ A` vs. generic `A^T (B^T r)`
-  (extra `B m^2` per iteration); measure before deciding.
-- Callback keyword `W`: pass the effective operator instead of a matrix.
-- The SWR microphone-subset path does not cover arbitrary measurement-row
-  subsets; handling those separately remains open.
-- `ucmf.acoular`: Acoular passes a dictionary; matrix-free propagation needs the Acoular PR.
-
-## Migration plan (one reviewable step each)
-
-1. Operator module and tests (dot-product test, dictionary == propagation,
-   `select_rows`, `select_mics`, `select_columns`, `transformed`).
-2. ISTA/FISTA, step size and `ucmf.acoular` on operators.
-3. AdaLFISTASW and AdaLFISTA on operators with microphone subsets.
-4. AdaLFISTASWR via a congruence operator on active CMF measurements;
-   then its tests (deferred O3).
-5. `compile_unrolled`, examples, docs; supersede parts of 0002/0004/0006.
+- SW/LFISTA support both `weight_mode='factored'` (default) and `'precomputed'`
+  (dense operators only); timings are in the README benchmark.
+- Callback keyword `W` (and `W_recurrent`) is the effective operator, not a matrix.
+- Open: reduced models (SWR/R) accept only CMF operators, so arbitrary row subsets are unsupported.
+- Open: `ucmf.acoular` wraps Acoular's dense dictionary; matrix-free propagation needs the Acoular PR.
