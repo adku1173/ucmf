@@ -15,6 +15,12 @@ def compile_unrolled(model, t_max, mode='reduce-overhead'):
     after ``t`` are still computed; they do not change ``x_t`` and contribute
     zero gradient to it.
 
+    The model is an input of the compiled graph, not a captured constant, so new
+    instances of the same model type (e.g. in a hyperparameter search) reuse the
+    graph. Each further model type, ``t_max``, or ``mode`` compiles anew; after
+    ``torch._dynamo.config.recompile_limit`` (8) such variants, torch falls back
+    to eager execution.
+
     Parameters
     ----------
     model : torch.nn.Module
@@ -31,15 +37,16 @@ def compile_unrolled(model, t_max, mode='reduce-overhead'):
         ``f(y, **forward_kwargs)`` returning a tensor of shape ``(t_max, B, n)``;
         ``forward_kwargs`` are passed to ``model.forward`` with ``t = t_max``.
     """
-    collector = IntermediateOutputCollector()
 
-    def all_intermediates(y, **forward_kwargs):
-        previous_callbacks = model.callbacks
-        model.callbacks = [*previous_callbacks, collector]
+    def all_intermediates(solver, y, **forward_kwargs):
+        collector = IntermediateOutputCollector()
+        previous_callbacks = solver.callbacks
+        solver.callbacks = [*previous_callbacks, collector]
         try:
-            model(y, t=t_max, **forward_kwargs)
+            solver(y, t=t_max, **forward_kwargs)
         finally:
-            model.callbacks = previous_callbacks
+            solver.callbacks = previous_callbacks
         return torch.stack(collector.intermediates)
 
-    return torch.compile(all_intermediates, mode=mode)
+    compiled = torch.compile(all_intermediates, mode=mode)
+    return lambda y, **forward_kwargs: compiled(model, y, **forward_kwargs)
