@@ -5,7 +5,7 @@ import math
 
 from ucmf import FISTA, ISTA
 from ucmf.optim.operator import CMFDictionary, CMFPropagation, MatrixMult
-from ucmf.optim.utils import default_gamma_from_A
+from ucmf.optim.utils import default_gamma_from_operator
 
 import numpy as np
 import pytest
@@ -20,7 +20,7 @@ def numpy_reference(A, y, x0, lam, gamma, *, steps, nonnegative, accelerated):
     The default step is taken from ucmf (power-iteration estimate for the whole,
     possibly batched A); its formula is tested separately in test_optim_utils.
     """
-    default_steps = np.broadcast_to(default_gamma_from_A(torch.from_numpy(A)).numpy(), (len(y),))
+    default_steps = np.broadcast_to(default_gamma_from_operator(MatrixMult(torch.from_numpy(A))).numpy(), (len(y),))
     solutions = []
     for sample, observation in enumerate(y):
         matrix = A if A.ndim == 2 else A[sample]

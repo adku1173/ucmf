@@ -1,8 +1,8 @@
 """Standalone solver utilities preserve batching and autograd behavior."""
 
+from ucmf.optim.operator import MatrixMult
 from ucmf.optim.utils import (
-    default_gamma_from_A,
-    estimate_squared_spectral_norm,
+    default_gamma_from_operator,
     resolve_batch_param,
     to_batch_vector,
     validate_tensor,
@@ -59,9 +59,14 @@ def test_default_step_size_uses_spectral_norm_without_autograd(batched):
         A = torch.stack([A, 2 * A])
     A.requires_grad_()
     expected = torch.tensor([2 / 4.2, 2 / 16.8]) if batched else torch.tensor(2 / 4.2)
-    result = default_gamma_from_A(A)
+    result = default_gamma_from_operator(MatrixMult(A))
     torch.testing.assert_close(result, expected)
     assert not result.requires_grad
+
+
+def squared_norm_estimate(A):
+    """Power-iteration estimate of ``||A||_2**2`` implied by the default step."""
+    return A.shape[-2] / (1.05 * default_gamma_from_operator(MatrixMult(A)))
 
 
 @pytest.mark.parametrize('batched', [False, True])
@@ -76,7 +81,7 @@ def test_power_iteration_estimates_squared_spectral_norm_from_below(batched):
     sigma[0] = 1.0
     A = (U * sigma) @ V.mT
     A.requires_grad_()
-    estimate = estimate_squared_spectral_norm(A)
+    estimate = squared_norm_estimate(A)
     assert estimate.shape == batch
     assert not estimate.requires_grad
     torch.testing.assert_close(estimate, torch.ones(batch, dtype=torch.float64), rtol=1e-12, atol=0)
@@ -85,20 +90,20 @@ def test_power_iteration_estimates_squared_spectral_norm_from_below(batched):
 def test_power_iteration_is_a_lower_bound_for_random_matrices():
     A = torch.randn(20, 40, 25, dtype=torch.float64, generator=torch.Generator().manual_seed(1))
     exact = torch.linalg.matrix_norm(A, ord=2) ** 2
-    assert torch.all(estimate_squared_spectral_norm(A) <= exact * (1 + 1e-12))  # Rayleigh quotient
+    assert torch.all(squared_norm_estimate(A) <= exact * (1 + 1e-12))  # Rayleigh quotient
 
 
 def test_power_iteration_is_exact_for_diagonal_matrix():
     A = torch.diag(torch.tensor([3.0, 1.0, 0.5], dtype=torch.float64))
-    torch.testing.assert_close(estimate_squared_spectral_norm(A), torch.tensor(9.0, dtype=torch.float64))
+    torch.testing.assert_close(squared_norm_estimate(A), torch.tensor(9.0, dtype=torch.float64))
 
 
 def test_power_iteration_is_deterministic_and_leaves_global_rng_untouched():
     A = torch.randn(30, 20, dtype=torch.float64)
     state = torch.get_rng_state()
-    first = estimate_squared_spectral_norm(A)
+    first = default_gamma_from_operator(MatrixMult(A))
     assert torch.equal(torch.get_rng_state(), state)
-    assert torch.equal(estimate_squared_spectral_norm(A), first)
+    assert torch.equal(default_gamma_from_operator(MatrixMult(A)), first)
 
 
 def test_tensor_validation_does_not_modify_input_or_autograd():

@@ -9,7 +9,7 @@ from ucmf.optim.operator import (
     MatrixMult,
     _AuxiliaryPropagationOperator,
 )
-from ucmf.optim.utils import default_gamma_from_A, default_gamma_from_operator
+from ucmf.optim.utils import default_gamma_from_operator
 
 from cases.models import ModelCases, build_model
 from cases.operators import BATCH_SIZE, OperatorCases, cmf_matrix
@@ -199,9 +199,9 @@ def test_detached_keeps_subset_and_input_gradients(operator, matrix):
 
 
 @parametrize_with_cases(OPERATOR, cases=OperatorCases)
-def test_default_step_matches_matrix_calculation(operator, matrix):
+def test_default_step_depends_only_on_the_linear_map(operator, matrix):
     gamma = default_gamma_from_operator(operator)
-    torch.testing.assert_close(gamma, default_gamma_from_A(matrix), rtol=1e-12, atol=0)
+    torch.testing.assert_close(gamma, default_gamma_from_operator(MatrixMult(matrix)), rtol=1e-12, atol=0)
 
 
 def test_operator_step_does_not_track_gradients():

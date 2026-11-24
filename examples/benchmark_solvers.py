@@ -18,7 +18,8 @@ import acoular as ac
 from acoular.solvers import L1RegularizedLeastSquaresProblem, LeastSquaresSolver, SolverBase, SolverOutput
 
 from ucmf.acoular import FISTATorchSolver, ISTATorchSolver
-from ucmf.optim.utils import default_gamma_from_A
+from ucmf.optim.operator import MatrixMult as TorchMatrixMult
+from ucmf.optim.utils import default_gamma_from_operator
 
 import numpy as np
 import torch
@@ -47,7 +48,7 @@ class PylopsSolver(LeastSquaresSolver):
     def solve(self, problem, dictionary_matrix, data, start_value=None):
         m = dictionary_matrix.shape[0]
         eps = 2 * m * problem.alpha * problem.unit_mult
-        step = float(default_gamma_from_A(torch.from_numpy(dictionary_matrix))) / m
+        step = float(default_gamma_from_operator(TorchMatrixMult(torch.from_numpy(dictionary_matrix)))) / m
         x, _, _ = self.algorithm(
             Op=MatrixMult(dictionary_matrix), y=data, niter=self.n_iter, eps=eps, alpha=step, tol=0.0
         )

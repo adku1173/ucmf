@@ -14,9 +14,10 @@ for dtype, device and shape, since value checks would force a GPU sync.
 import math
 from copy import copy
 
-from .utils import apply_adjoint_operator, apply_forward_operator, validate_tensor
+from .utils import validate_tensor
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 
@@ -93,10 +94,14 @@ class MatrixMult(LinearOperator):
         self.device = matrix.device
 
     def forward(self, x):
-        return apply_forward_operator(self.matrix, x)
+        if self.matrix.ndim == 2:
+            return F.linear(x, self.matrix)
+        return torch.bmm(self.matrix, x.unsqueeze(-1)).squeeze(-1)
 
     def adjoint(self, r):
-        return apply_adjoint_operator(r, self.matrix)
+        if self.matrix.ndim == 2:
+            return r @ self.matrix
+        return torch.bmm(r.unsqueeze(1), self.matrix).squeeze(1)
 
     def _with_matrix(self, matrix, rows):
         op = MatrixMult(matrix, rows=rows)
