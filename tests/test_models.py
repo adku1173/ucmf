@@ -207,7 +207,7 @@ def test_callbacks_run_in_order_with_detached_operator(spec, recorder):
     model.callbacks = [recorder]
     spec.solve(model, y, operator, x0, t=3)
     assert recorder.events == [(event, k) for k in range(3) for event in ('begin', 'end')]
-    torch.testing.assert_close(model.y, y)
+    assert not hasattr(model, 'y')  # y reaches callbacks only through the end-callback metadata
     for kwargs in recorder.end_kwargs:
         assert not kwargs['A'].H.requires_grad
         torch.testing.assert_close(kwargs['y'], y)

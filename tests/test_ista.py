@@ -119,7 +119,7 @@ def test_solution_satisfies_normalized_lasso_kkt(solver_type, nonnegative):
 
 
 @pytest.mark.parametrize('solver_type', SOLVERS)
-def test_gradient_normalization_and_explicit_column_scaling(solver_type):
+def test_one_step_uses_normalized_gradient(solver_type):
     A = torch.tensor([[3.0, 0.0], [4.0, 2.0]])
     y = torch.ones(1, 2)
 

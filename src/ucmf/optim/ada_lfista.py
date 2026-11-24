@@ -32,7 +32,7 @@ class _TwoWeights(FISTA):
         if weight_mode not in ('factored', 'precomputed'):
             raise ValueError("weight_mode must be 'factored' or 'precomputed'.")
         self.weight_mode = weight_mode
-        self.num_measurements = int(num_measurements)
+        self.num_measurements = num_measurements
         if self.num_measurements <= 0:
             raise ValueError(f'num_measurements must be positive, got {num_measurements}')
         self.B1 = nn.Parameter(self._initial_weight(B1, 'B1'))
@@ -47,7 +47,7 @@ class _TwoWeights(FISTA):
 
     def _prepare_update(self, y, x0, operator):
         """Detach the operator and bind the two-matrix update direction for one solve."""
-        y, x0, operator, _ = self._prepare_operator_inputs(y, x0, operator)
+        y, x0, operator = self._prepare_operator_inputs(y, x0, operator)
         recurrent_operator = make_weight_operator(operator, self.B1, self.weight_mode)
         weight_operator = make_weight_operator(operator, self.B2)
         # M.T @ y does not depend on the iteration; no need to form M.

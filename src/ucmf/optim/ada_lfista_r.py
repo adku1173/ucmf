@@ -29,7 +29,7 @@ class _ReducedTwoWeights(FISTA):
         For a microphone subset, align ``y`` with ``operator.rows``.
         """
         validate_cmf_operator(operator, self.num_mics, self.r_diag)
-        y, x0, operator, _ = self._prepare_operator_inputs(y, x0, operator)
+        y, x0, operator = self._prepare_operator_inputs(y, x0, operator)
         recurrent_operator = make_propagation_weight_operator(operator, self.Br1_re, self.Br1_im)
         weight_operator = make_propagation_weight_operator(operator, self.Br2_re, self.Br2_im)
         measurement_term = weight_operator.adjoint(y)

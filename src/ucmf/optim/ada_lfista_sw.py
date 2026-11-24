@@ -33,7 +33,7 @@ class _SingleWeight(FISTA):
         if weight_mode not in ('factored', 'precomputed'):
             raise ValueError("weight_mode must be 'factored' or 'precomputed'.")
         self.weight_mode = weight_mode
-        self.num_measurements = int(num_measurements)
+        self.num_measurements = num_measurements
         if self.num_measurements <= 0:
             raise ValueError(f'num_measurements must be positive, got {num_measurements}')
 
@@ -45,7 +45,7 @@ class _SingleWeight(FISTA):
 
     def _prepare_update(self, y, x0, operator):
         """Detach the operator and bind the weighted update direction for one solve."""
-        y, x0, operator, _ = self._prepare_operator_inputs(y, x0, operator)
+        y, x0, operator = self._prepare_operator_inputs(y, x0, operator)
         weight_operator = make_weight_operator(operator, self.B, self.weight_mode)
         gradient = self._make_gradient(y, operator, weight_operator)
         residual_gradient = self._make_residual_gradient(y, operator, weight_operator)

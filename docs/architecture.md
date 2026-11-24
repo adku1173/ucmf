@@ -49,7 +49,7 @@ forward; model-owned schedules/controllers remain responsible for their outputs.
 Both loops call `_start_iterations`,
 `_on_iteration_begin`, and `_on_iteration_end` for the same callback lifecycle:
 
-1. Set callback-visible y and clear the stop flag.
+1. Clear the stop flag.
 2. Before each step, set the iteration index and run begin callbacks.
 3. Stop immediately if requested; otherwise compute the step.
 4. Run end callbacks with the completed solution, gamma, theta, and the
@@ -57,7 +57,7 @@ Both loops call `_start_iterations`,
 
 For classical solves A and W refer to the same detached operator. Callback order, batched
 stopping, intermediate autograd graphs, and zero-step behavior are unchanged.
-The existing callback attributes (`y`, `iter`, `stop`) remain mutable;
+The callback attributes `iter` and `stop` remain mutable (`y` is passed only as metadata);
 one shared solver/callback instance is not made concurrent or reentrant.
 
 ## Learned step schedules
@@ -108,7 +108,7 @@ effective weight as a `LinearOperator` from its own parameters, e.g. with
 `make_weight_operator(operator, self.B)` from `weights.py`:
 
 ```python
-y, x0, operator, _ = self._prepare_operator_inputs(y, x0, operator)
+y, x0, operator = self._prepare_operator_inputs(y, x0, operator)
 weight_operator = make_weight_operator(operator, self.B)
 return self._iterate_accelerated(
     y, x0, t, step_params_fn,

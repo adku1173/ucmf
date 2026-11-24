@@ -42,7 +42,7 @@ class _ReducedSingleWeight(FISTA):
         of ``Br`` and ``y`` must follow ``operator.rows`` in the full vectorization.
         """
         validate_cmf_operator(operator, self.num_mics, self.r_diag)
-        y, x0, operator, _ = self._prepare_operator_inputs(y, x0, operator)
+        y, x0, operator = self._prepare_operator_inputs(y, x0, operator)
         weight_operator = make_propagation_weight_operator(operator, self.Br_re, self.Br_im)
         gradient = self._make_gradient(y, operator, weight_operator)
         residual_gradient = self._make_residual_gradient(y, operator, weight_operator)

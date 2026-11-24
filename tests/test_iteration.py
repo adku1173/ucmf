@@ -25,7 +25,7 @@ class ScheduledFISTA(FISTA):
         self.thetas = torch.nn.Parameter(torch.tensor([0.01, 0.02, 0.015], dtype=torch.float64))
 
     def forward(self, y, x0=None, t=1, operator=None):
-        y, x0, operator, _ = self._prepare_operator_inputs(y, x0, operator)
+        y, x0, operator = self._prepare_operator_inputs(y, x0, operator)
         return self._iterate_accelerated(
             y, x0, t, self._step_params,
             gradient=self._make_gradient(y, operator, operator),
@@ -75,7 +75,7 @@ def test_own_recurrent_loop_keeps_graphs_and_resets_local_hidden_state(solver_ty
             cell = y.new_zeros(y.shape[0], 1)
             lam = theta / gamma
 
-            self._start_iterations(y)
+            self._start_iterations()
             for k in range(t):
                 if not self._on_iteration_begin(k, x):
                     break
@@ -158,9 +158,9 @@ def test_gradient_and_callback_hooks_are_dispatched(solver_type):
 
             return scaled_gradient
 
-        def _start_iterations(self, y):
+        def _start_iterations(self):
             seen.append('start')
-            super()._start_iterations(y)
+            super()._start_iterations()
 
         def _on_iteration_begin(self, k, x):
             seen.append('begin')

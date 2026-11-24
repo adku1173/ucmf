@@ -93,7 +93,7 @@ class NeuralAugmentation:
         tk = 1.0
         hidden, cell = self.controller.initial_state(y.shape[0])
 
-        self._start_iterations(y)
+        self._start_iterations()
         for k in range(t):
             if not self._on_iteration_begin(k, x):
                 break

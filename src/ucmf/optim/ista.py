@@ -101,26 +101,20 @@ class ISTA(nn.Module):
         """Perform a single proximal step using the prepared direction."""
         return shrink_func(x + gamma * gradient(x), theta)
 
-    def _prepare_vectors(self, y, x0):
-        """Validate measurements and warm start, adding batch axes if needed."""
+    def _prepare_operator_inputs(self, y, x0, operator):
+        """Validate ``y``, ``x0`` and the operator, add batch axes, and detach the operator.
+
+        A missing warm start becomes zeros of shape ``(B, n)``, so the returned
+        ``x0`` is always a tensor.
+        """
         if not torch.is_tensor(y) or y.ndim not in (1, 2) or not torch.is_floating_point(y):
-            msg = 'y must be a real floating-point tensor with shape (m,) or (B, m).'
-            raise ValueError(msg)
+            raise ValueError('y must be a real floating-point tensor with shape (m,) or (B, m).')
         if y.ndim == 1:
             y = y.unsqueeze(0)
         if x0 is not None:
             validate_tensor(x0, name='x0', dtype=y.dtype, device=y.device)
             if x0.ndim == 1:
                 x0 = x0.unsqueeze(0)
-        return y, x0
-
-    def _prepare_operator_inputs(self, y, x0, operator):
-        """Check operator metadata against the prepared vectors and detach its data.
-
-        A missing warm start becomes zeros of shape ``(B, n)``, so the returned
-        ``x0`` is always a tensor.
-        """
-        y, x0 = self._prepare_vectors(y, x0)
         if not isinstance(operator, LinearOperator):
             raise ValueError('operator must be a LinearOperator; wrap dense matrices in MatrixMult.')
         if operator.dtype != y.dtype:
@@ -138,15 +132,15 @@ class ISTA(nn.Module):
             x0 = y.new_zeros((batch_size, n))
         elif x0.shape != (batch_size, n):
             raise ValueError(f'x0 has shape {tuple(x0.shape)} but expected {(batch_size, n)}')
-        return y, x0, operator.detached(), batch_size
+        return y, x0, operator.detached()
 
-    def _resolve_lam_value(self, lam, batch_size, operator, missing_message='lam must be provided.'):
+    def _resolve_lam_value(self, lam, batch_size, operator):
         """Resolve regularization strength for scalar or per-batch input."""
         if torch.is_tensor(lam):
             validate_tensor(lam, name='lam', dtype=operator.dtype, device=operator.device)
         lam_value = resolve_batch_param(lam, batch_size, name='lam')
         if lam_value is None:
-            raise ValueError(missing_message)
+            raise ValueError('lam must be provided.')
         return lam_value
 
     def _resolve_gamma_theta(self, lam_value, gamma, batch_size, operator):
@@ -164,9 +158,8 @@ class ISTA(nn.Module):
         theta_value = lam_value * gamma_value
         return gamma_value, theta_value
 
-    def _start_iterations(self, y):
-        """Initialize callback-visible solver state."""
-        self.y = y
+    def _start_iterations(self):
+        """Clear the stop flag; callbacks get ``y`` through the end-callback metadata."""
         self.stop = False
 
     def _on_iteration_begin(self, k, x):
@@ -187,7 +180,7 @@ class ISTA(nn.Module):
         shrink_func = self.get_shrink_func()
         x = x0.clone()
 
-        self._start_iterations(y)
+        self._start_iterations()
         for k in range(t):
             if not self._on_iteration_begin(k, x):
                 break
@@ -222,7 +215,8 @@ class ISTA(nn.Module):
         if t < 0:
             msg = 't must be non-negative.'
             raise ValueError(msg)
-        y, x0, operator, batch_size = self._prepare_operator_inputs(y, x0, operator)
+        y, x0, operator = self._prepare_operator_inputs(y, x0, operator)
+        batch_size = y.shape[0]
         lam_value = self._resolve_lam_value(lam, batch_size, operator)
         gamma_value, theta_value = self._resolve_gamma_theta(lam_value, gamma, batch_size, operator)
         return self._iterate(
@@ -256,7 +250,7 @@ class FISTA(ISTA):
         z = x0.clone()
         tk = 1.0
 
-        self._start_iterations(y)
+        self._start_iterations()
         for k in range(t):
             if not self._on_iteration_begin(k, x):
                 break
