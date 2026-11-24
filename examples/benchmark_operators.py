@@ -3,11 +3,15 @@
 Timing includes the solve and, for Ada models, parameter gradients. Operator
 construction and step-size estimation are excluded. Distinct dictionaries use
 two alternating same-shape batches; shared dictionaries reuse the operator.
+Each case and execution mode runs in a fresh process. Peak allocated and
+reserved memory are measured during warm timing, including live inputs and
+any allocator reservations retained after warm-up.
 """
 
 import argparse
 from itertools import product
 from math import sqrt
+from multiprocessing import get_context
 from statistics import median
 from time import perf_counter
 
@@ -149,13 +153,17 @@ def measure(args, mode, solve, step, inputs, references):
         timed(i % 2)
     torch.cuda.reset_peak_memory_stats()
     times = [timed(i % 2)[0] for i in range(args.repeats)]
-    peak = torch.cuda.max_memory_reserved() / 2**20
-    return f'{1000 * median(times):.3f} | {first:.3f} | {peak:.0f}'
+    allocated = torch.cuda.max_memory_allocated() / 2**20
+    reserved = torch.cuda.max_memory_reserved() / 2**20
+    return f'{1000 * median(times):.3f} | {first:.3f} | {allocated:.1f} | {reserved:.1f}'
 
 
-def run(args, case):
-    torch.compiler.reset()
-    torch.cuda.empty_cache()
+def run(args, case, mode, *, header):
+    if not torch.cuda.is_available():
+        raise SystemExit('This benchmark requires CUDA.')
+    torch.set_float32_matmul_precision('highest')
+    if header:
+        print_header(args)
     c, grid, batch, layout, model_type, representation, weight = case
     label = f'| {c} | {grid**2} | {batch} | {layout} | {model_type.__name__} | {representation} | {weight}'
     rng = torch.Generator(device='cuda').manual_seed(7)
@@ -172,32 +180,35 @@ def run(args, case):
         inputs = represent(source, representation)
         del source, propagation
     except torch.OutOfMemoryError:
-        for mode in args.mode:
-            print(f'{label} | {mode} | OOM (setup) | — | — |', flush=True)
-        return
-
-    for mode in args.mode:
+        metrics = 'OOM (setup) | — | — | —'
+    else:
         torch.cuda.empty_cache()
         try:
             metrics = measure(args, mode, solve, step, inputs, references)
         except torch.OutOfMemoryError:
-            metrics = 'OOM | — | —'
-        print(f'{label} | {mode} | {metrics} |', flush=True)
+            metrics = 'OOM | — | — | —'
+    print(f'{label} | {mode} | {metrics} |', flush=True)
 
 
-def main():
-    args = parse_args()
-    if not torch.cuda.is_available():
-        raise SystemExit('This benchmark requires CUDA.')
-    torch.set_float32_matmul_precision('highest')
+def print_header(args):
     print(f'{torch.cuda.get_device_name()} | PyTorch {torch.__version__} | float32 | {args.steps} iterations')
     print(f'CSM diagonal: {"included" if args.keep_diagonal else "omitted"}; median of {args.repeats} runs.')
     print('Unsupported combinations are omitted (see --help for case filters).')
     print('| Mics | Grid points | Batch | Dictionaries | Model | Operator | Weight | Mode |'
-          ' Warm ms | First s | Peak MiB |')
-    print('|---:|---:|---:|---|---|---|---|---|---:|---:|---:|', flush=True)
-    for case in cases(args):
-        run(args, case)
+          ' Warm ms | First s | Peak allocated MiB | Peak reserved MiB |')
+    print('|---:|---:|---:|---|---|---|---|---|---:|---:|---:|---:|', flush=True)
+
+
+def main():
+    args = parse_args()
+    context = get_context('spawn')
+    for index, (case, mode) in enumerate(product(cases(args), args.mode)):
+        worker = context.Process(target=run, args=(args, case, mode), kwargs={'header': index == 0})
+        worker.start()
+        worker.join()
+        if worker.exitcode != 0:
+            raise SystemExit(f'Benchmark worker failed for {case} ({mode}), exit status {worker.exitcode}.')
+        worker.close()
 
 
 if __name__ == '__main__':
