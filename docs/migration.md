@@ -11,7 +11,7 @@ not a runtime dependency.
 | --- | --- |
 | `ista.py` | ISTA/FISTA, now with explicit local loops and LS only |
 | `weights.py` | Protected weight preparation for subclass-owned forwards |
-| `preprocessing.py` | Explicit column normalization |
+| `preprocessing.py` | Removed; normalization will be revisited later |
 | general classes in `callbacks.py` | Stopping, parameter histories, intermediate outputs |
 | `ada.py` (`AdaptiveGradientWrapper`) + `alfista.py` (`ALFISTA`) | `ada_lfista_sw.py`: `AdaLFISTASW` (model `ADA-ALFISTA`, paper name Ada-LFISTA-SW) |
 | `lfista.py` (`LFISTA`, `TwoMatrixGradientWrapper`) | `ada_lfista.py`: `AdaLFISTA` (model `ADA-LFISTA`, paper name Ada-LFISTA) |
@@ -25,11 +25,10 @@ or acoustic callbacks. Runtime dependencies are only PyTorch and NumPy.
 
 - Objective: `||y - A x||² / (2 m) + lam * ||x||₁`.
 - Negative gradient: `A.T @ residual / m`; threshold: `gamma * lam`.
-- Positive/signed shrinkage and the same FISTA/Nesterov recurrence.
+- Nonnegative/signed shrinkage and the same FISTA/Nesterov recurrence.
 - Shared/batched matrices, scalar/per-sample parameters, and cloned warm starts.
 - Always-batched outputs and fixed/detached A; output dtype/device match y.
 - Gradients through y, x0, lam, gamma, and subclass-supplied W.
-- Explicit column normalization and physical-coordinate rescaling.
 - Callback order/keywords, zero-based iteration indices, begin/end stopping,
   relative/absolute batch convergence, and intermediate computational graphs.
 
@@ -44,7 +43,7 @@ complex operators, and zero default-step spectral norms raise clear errors.
 
 ## Current interface and intentional removals
 
-Constructors accept `positive=True, callbacks=None`. The public forward is
+Constructors accept `nonnegative=True, callbacks=None`. The public forward is
 `forward(y, x0=None, t=1, operator=None, lam=None, gamma=None)`.
 
 - Replace classical `A=A` with `operator=MatrixMult(A)` (`MatrixMult` is in

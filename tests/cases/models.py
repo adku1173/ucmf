@@ -62,7 +62,7 @@ ModelSpec = make_dataclass(
 )
 
 
-def build_model(spec, r_diag=False, *, positive=False, **kwargs):
+def build_model(spec, r_diag=False, *, nonnegative=False, **kwargs):
     """Float64 model with identity auxiliary weights for the full array of ``NUM_MICS``.
 
     NA models get the fixed feature normalization ``mean = 0``, ``std = 1``. The random
@@ -70,7 +70,7 @@ def build_model(spec, r_diag=False, *, positive=False, **kwargs):
     """
     with torch.random.fork_rng(devices=[]):  # models are built on the CPU
         torch.manual_seed(0)
-        model = spec.make_model(NUM_MICS, r_diag, positive=positive, **{**spec.model_kwargs, **kwargs}).double()
+        model = spec.make_model(NUM_MICS, r_diag, nonnegative=nonnegative, **{**spec.model_kwargs, **kwargs}).double()
     if isinstance(model, NeuralAugmentation):
         model.controller.feature_mean.zero_()
         model.controller.feature_std.fill_(1.0)

@@ -25,8 +25,8 @@ from torch import nn
 class _ReducedSingleWeight(FISTA):
     """Update direction ``A^T B^T (y - A z) / m`` with ``B`` the congruence with ``Br``."""
 
-    def __init__(self, *, num_mics, positive=True, callbacks=None, r_diag=False):
-        super().__init__(positive=positive, callbacks=callbacks)
+    def __init__(self, *, num_mics, nonnegative=True, callbacks=None, r_diag=False):
+        super().__init__(nonnegative=nonnegative, callbacks=callbacks)
         if num_mics <= int(r_diag):
             raise ValueError(f'num_mics must exceed {int(r_diag)} for r_diag={r_diag}, got {num_mics}.')
         self.num_mics = num_mics
@@ -59,7 +59,7 @@ class AdaLFISTASWR(LearnedParams, _ReducedSingleWeight):
         num_mics (int): number of microphones in the full array.
         gamma_init (float): initial applied step size for every iteration.
         theta_init (float): initial applied soft-threshold for every iteration.
-        positive (bool): enforce non-negativity via positive shrinkage.
+        nonnegative (bool): enforce non-negativity via nonnegative shrinkage.
         callbacks (list | None): optional callbacks; ``A`` and ``W`` are operators.
         r_diag (bool): whether the CSM diagonal is omitted; must match the operator.
     """
@@ -78,7 +78,7 @@ class NA_AdaLFISTASWR(NeuralAugmentation, _ReducedSingleWeight):
         gamma_init (float): initial applied step size of the controller readout.
         theta_init (float): initial applied soft-threshold of the controller readout.
         lstm_dim (int): hidden size of the LSTM controller (default 128).
-        positive (bool): enforce non-negativity via positive shrinkage.
+        nonnegative (bool): enforce non-negativity via nonnegative shrinkage.
         callbacks (list | None): optional callbacks; ``A`` and ``W`` are operators.
         r_diag (bool): whether the CSM diagonal is omitted; must match the operator.
     """

@@ -12,7 +12,6 @@ from .callbacks import (
 )
 from .compile import compile_unrolled
 from .ista import FISTA, ISTA
-from .preprocessing import normalize_sensing_matrix_columns
 
 __all__ = [
     'AdaLFISTA',
@@ -30,5 +29,4 @@ __all__ = [
     'SolutionChangeStopper',
     'StepParamCollector',
     'compile_unrolled',
-    'normalize_sensing_matrix_columns',
 ]

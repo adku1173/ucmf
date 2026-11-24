@@ -20,7 +20,7 @@ class ScheduledFISTA(FISTA):
     """Test-only ALFISTA-style subclass, not a migrated production model."""
 
     def __init__(self, callbacks=None):
-        super().__init__(positive=False, callbacks=callbacks)
+        super().__init__(nonnegative=False, callbacks=callbacks)
         self.gammas = torch.nn.Parameter(torch.tensor([0.1, 0.3, 0.2], dtype=torch.float64))
         self.thetas = torch.nn.Parameter(torch.tensor([0.01, 0.02, 0.015], dtype=torch.float64))
 
@@ -63,7 +63,7 @@ def test_own_recurrent_loop_keeps_graphs_and_resets_local_hidden_state(solver_ty
 
     class RecurrentSolver(solver_type):
         def __init__(self):
-            super().__init__(positive=False)
+            super().__init__(nonnegative=False)
             self.gain = torch.nn.Parameter(torch.tensor(0.2, dtype=torch.float64))
 
         def _iterate(self, y, x0, gamma, theta, t, *, gradient, callback_metadata):
@@ -138,8 +138,8 @@ def test_existing_momentum_hook_can_disable_acceleration():
     A = torch.tensor([[1.0, 0.2], [0.3, 1.3]])
     y = torch.tensor([[1.0, 0.5]])
     operator = MatrixMult(A)
-    expected = ISTA(positive=False)(y, operator=operator, lam=0.01, gamma=0.2, t=9)
-    actual = UnacceleratedFISTA(positive=False)(y, operator=operator, lam=0.01, gamma=0.2, t=9)
+    expected = ISTA(nonnegative=False)(y, operator=operator, lam=0.01, gamma=0.2, t=9)
+    actual = UnacceleratedFISTA(nonnegative=False)(y, operator=operator, lam=0.01, gamma=0.2, t=9)
     torch.testing.assert_close(actual, expected)
 
 

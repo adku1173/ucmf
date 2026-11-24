@@ -28,8 +28,8 @@ from torch import nn
 class _SingleWeight(FISTA):
     """Update direction ``W.T @ (y - A z) / m`` with ``W = B_active @ A``."""
 
-    def __init__(self, *, num_measurements, positive=True, callbacks=None, B=None, weight_mode='factored'):
-        super().__init__(positive=positive, callbacks=callbacks)
+    def __init__(self, *, num_measurements, nonnegative=True, callbacks=None, B=None, weight_mode='factored'):
+        super().__init__(nonnegative=nonnegative, callbacks=callbacks)
         if weight_mode not in ('factored', 'precomputed'):
             raise ValueError("weight_mode must be 'factored' or 'precomputed'.")
         self.weight_mode = weight_mode
@@ -62,7 +62,7 @@ class AdaLFISTASW(LearnedParams, _SingleWeight):
         num_measurements (int): measurement dimension ``m`` spanned by ``B``.
         gamma_init (float): initial applied step size for every iteration.
         theta_init (float): initial applied soft-threshold for every iteration.
-        positive (bool): enforce non-negativity via positive shrinkage.
+        nonnegative (bool): enforce non-negativity via nonnegative shrinkage.
         callbacks (list | None): optional solver callbacks.
         B (Tensor | None): optional ``(m, m)`` init for the auxiliary weight matrix;
             defaults to the identity, reproducing classical FISTA.
@@ -85,7 +85,7 @@ class NA_AdaLFISTASW(NeuralAugmentation, _SingleWeight):
         gamma_init (float): initial applied step size of the controller readout.
         theta_init (float): initial applied soft-threshold of the controller readout.
         lstm_dim (int): hidden size of the LSTM controller (default 128).
-        positive (bool): enforce non-negativity via positive shrinkage.
+        nonnegative (bool): enforce non-negativity via nonnegative shrinkage.
         callbacks (list | None): optional solver callbacks.
         B (Tensor | None): optional ``(m, m)`` init; defaults to the identity.
         weight_mode (str): ``'factored'`` or ``'precomputed'``, as for ``AdaLFISTASW``.

@@ -17,21 +17,21 @@ SPEC = 'spec'
 PROBLEM = 'operator, y, x0'
 
 
-def reference(spec, model, operator, y, x0, positive=False, x_shift=0.0):
+def reference(spec, model, operator, y, x0, nonnegative=False, x_shift=0.0):
     """All ``T`` iterates of the independent dense reference for ``model``."""
     return reference_iterates(
         *spec.dense_weights(model, operator), dense_matrix(operator), y, x0, T,
-        spec.step_params(model, y.shape[0]), positive=positive, accelerated=spec.accelerated, x_shift=x_shift,
+        spec.step_params(model, y.shape[0]), nonnegative=nonnegative, accelerated=spec.accelerated, x_shift=x_shift,
     )
 
 
-def assert_iterates_match_reference(spec, operator, y, x0, positive):
-    model = perturb_weights(build_model(spec, r_diag_of(operator), positive=positive))
+def assert_iterates_match_reference(spec, operator, y, x0, nonnegative):
+    model = perturb_weights(build_model(spec, r_diag_of(operator), nonnegative=nonnegative))
     collector = IntermediateOutputCollector()
     model.callbacks = [collector]
     with torch.no_grad():
         spec.solve(model, y, operator, x0)
-        expected = reference(spec, model, operator, y, x0, positive)
+        expected = reference(spec, model, operator, y, x0, nonnegative)
     torch.testing.assert_close(torch.stack(collector.intermediates), expected)
 
 
@@ -52,11 +52,11 @@ def assert_gradients_match_reference(spec, operator, y, x0):
         assert torch.count_nonzero(expected_grad)
 
 
-@pytest.mark.parametrize('positive', [False, True], ids=['signed', 'positive'])
+@pytest.mark.parametrize('nonnegative', [False, True], ids=['signed', 'nonnegative'])
 @parametrize_with_cases(PROBLEM, cases=ProblemCases, has_tag='cmf')
 @parametrize_with_cases(SPEC, cases=ModelCases)
-def test_iterates_match_reference(spec, operator, y, x0, positive):
-    assert_iterates_match_reference(spec, operator, y, x0, positive)
+def test_iterates_match_reference(spec, operator, y, x0, nonnegative):
+    assert_iterates_match_reference(spec, operator, y, x0, nonnegative)
 
 
 @parametrize_with_cases(PROBLEM, cases=ProblemCases, has_tag='cmf')
@@ -68,19 +68,19 @@ def test_gradients_match_reference(spec, operator, y, x0):
 @parametrize_with_cases(PROBLEM, cases=ProblemCases, has_tag='rows')
 @parametrize_with_cases(SPEC, cases=ModelCases, has_tag='dense')
 def test_row_subsets_match_reference(spec, operator, y, x0):
-    assert_iterates_match_reference(spec, operator, y, x0, positive=False)
+    assert_iterates_match_reference(spec, operator, y, x0, nonnegative=False)
     assert_gradients_match_reference(spec, operator, y, x0)
 
 
-@pytest.mark.parametrize('positive', [False, True], ids=['signed', 'positive'])
+@pytest.mark.parametrize('nonnegative', [False, True], ids=['signed', 'nonnegative'])
 @parametrize_with_cases(PROBLEM, cases=ProblemCases, has_tag='cmf')
 @parametrize_with_cases(SPEC, cases=ModelCases, has_tag='unfolded')
-def test_identity_weights_reproduce_fista(spec, operator, y, x0, positive):
+def test_identity_weights_reproduce_fista(spec, operator, y, x0, nonnegative):
     """Identity auxiliary weights and constant gamma/theta = lam * gamma give FISTA."""
     lam, gamma = 0.03, 0.12
-    model = build_model(spec, r_diag_of(operator), positive=positive)
+    model = build_model(spec, r_diag_of(operator), nonnegative=nonnegative)
     set_constant_step_params(model, gamma, lam * gamma)  # in float64 so the softplus round-trip is exact
-    expected = FISTA(positive=positive)(y, x0=x0, operator=operator, lam=lam, gamma=gamma, t=T)
+    expected = FISTA(nonnegative=nonnegative)(y, x0=x0, operator=operator, lam=lam, gamma=gamma, t=T)
     actual = spec.solve(model, y, operator, x0)
     torch.testing.assert_close(actual, expected, rtol=1e-12, atol=1e-12)
 

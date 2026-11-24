@@ -6,7 +6,7 @@ The classical interface is:
 from ucmf import FISTA
 from ucmf.optim.operator import MatrixMult
 
-solver = FISTA(positive=True, callbacks=[])
+solver = FISTA(nonnegative=True, callbacks=[])
 x = solver(y, x0=None, t=100, operator=MatrixMult(A), lam=0.01, gamma=None)
 ```
 

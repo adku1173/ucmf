@@ -89,7 +89,7 @@ def model_step_params(model, batch_size):
     return (controller.hidden_init.expand(batch_size, -1), controller.cell_init.expand(batch_size, -1)), step
 
 
-def reference_iterates(M, P, Q, A, y, x0, t, step_params, *, positive=False, accelerated=True, x_shift=0.0):
+def reference_iterates(M, P, Q, A, y, x0, t, step_params, *, nonnegative=False, accelerated=True, x_shift=0.0):
     """Independent dense (F)ISTA iteration; returns all ``t`` iterates ``(t, B, n)``.
 
     The direction at the current point ``p`` is ``(M.T @ y - P.T @ (Q @ p)) / m``.
@@ -108,7 +108,7 @@ def reference_iterates(M, P, Q, A, y, x0, t, step_params, *, positive=False, acc
         residual = y - (A @ point.unsqueeze(-1)).squeeze(-1)
         gamma, theta, state = step(residual, direction, state)
         proposal = point + gamma * direction
-        if positive:
+        if nonnegative:
             x_next = torch.relu(proposal - theta)
         else:
             x_next = proposal.sign() * torch.relu(proposal.abs() - theta)

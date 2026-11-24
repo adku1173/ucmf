@@ -89,7 +89,7 @@ def represent(inputs, representation):
 def make_step(model_type, c, propagation, steps, weight_mode, gamma):
     theta = 0.01
     if model_type in CLASSICAL:
-        model = model_type(positive=False)
+        model = model_type(nonnegative=False)
         kwargs = {'gamma': gamma, 'lam': theta / gamma}
     else:
         kwargs = {'weight_mode': weight_mode} if model_type in DENSE_WEIGHTS else {}
@@ -97,7 +97,7 @@ def make_step(model_type, c, propagation, steps, weight_mode, gamma):
             'num_measurements': propagation.shape[0],
         }
         model = model_type(
-            num_iterations=steps, gamma_init=gamma, theta_init=theta, positive=False, **size, **kwargs
+            num_iterations=steps, gamma_init=gamma, theta_init=theta, nonnegative=False, **size, **kwargs
         ).cuda()
         kwargs = {}
         rng = torch.Generator(device='cuda').manual_seed(8)

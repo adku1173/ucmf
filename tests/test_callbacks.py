@@ -17,7 +17,7 @@ import torch
 @pytest.mark.parametrize('solver_type', [ISTA, FISTA])
 def test_default_step_and_threshold_use_normalized_objective(solver_type):
     collector = StepParamCollector()
-    solver = solver_type(positive=False, callbacks=[collector])
+    solver = solver_type(nonnegative=False, callbacks=[collector])
     A = torch.tensor([[1.0, 0.0], [0.0, 2.0], [0.0, 0.0]])
 
     solver(torch.zeros(1, 3), operator=MatrixMult(A), lam=0.2, t=1)

@@ -26,9 +26,9 @@ class _TwoWeights(FISTA):
     """Update direction ``(M.T @ y - R.T @ (R @ z)) / m`` with ``R = B1 @ A``, ``M = B2 @ A``."""
 
     def __init__(
-        self, *, num_measurements, positive=True, callbacks=None, B1=None, B2=None, weight_mode='factored',
+        self, *, num_measurements, nonnegative=True, callbacks=None, B1=None, B2=None, weight_mode='factored',
     ):
-        super().__init__(positive=positive, callbacks=callbacks)
+        super().__init__(nonnegative=nonnegative, callbacks=callbacks)
         if weight_mode not in ('factored', 'precomputed'):
             raise ValueError("weight_mode must be 'factored' or 'precomputed'.")
         self.weight_mode = weight_mode
@@ -76,7 +76,7 @@ class AdaLFISTA(LearnedParams, _TwoWeights):
         num_measurements (int): full measurement dimension ``m`` spanned by ``B1``/``B2``.
         gamma_init (float): initial applied step size for every iteration.
         theta_init (float): initial applied soft-threshold for every iteration.
-        positive (bool): enforce non-negativity via positive shrinkage.
+        nonnegative (bool): enforce non-negativity via nonnegative shrinkage.
         callbacks (list | None): optional solver callbacks. End callbacks get the
             operators ``A``, ``W = M`` and ``W_recurrent = R``.
         B1, B2 (Tensor | None): optional ``(m, m)`` inits; default identity.
@@ -99,7 +99,7 @@ class NA_AdaLFISTA(NeuralAugmentation, _TwoWeights):
         gamma_init (float): initial applied step size of the controller readout.
         theta_init (float): initial applied soft-threshold of the controller readout.
         lstm_dim (int): hidden size of the LSTM controller (default 128).
-        positive (bool): enforce non-negativity via positive shrinkage.
+        nonnegative (bool): enforce non-negativity via nonnegative shrinkage.
         callbacks (list | None): optional solver callbacks; end callbacks get
             ``A``, ``W = M`` and ``W_recurrent = R``.
         B1, B2 (Tensor | None): optional ``(m, m)`` inits; default identity.

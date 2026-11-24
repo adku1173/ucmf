@@ -9,7 +9,7 @@ Both solve the LASSO problem:
     where m is the length of y / number of measurements.
 
 With support for:
-    - Non-negativity constraints (positive shrinkage)
+    - Non-negativity constraints (nonnegative shrinkage)
     - Normalized least-squares data fitting
     - Callback-based early stopping and monitoring
 """
@@ -40,7 +40,7 @@ class ISTA(nn.Module):
     ``theta = gamma * λ``.
 
     Args:
-        positive (bool): if True, enforces non-negativity on the solution
+        nonnegative (bool): if True, enforces non-negativity on the solution
         callbacks (list | None): optional solver callbacks
 
     Iterates are local variables in an explicit loop. Subclasses can reuse
@@ -50,12 +50,12 @@ class ISTA(nn.Module):
 
     def __init__(
         self,
-        positive=True,
+        nonnegative=True,
         callbacks=None,
     ):
         super().__init__()
 
-        self.positive = positive
+        self.nonnegative = nonnegative
         self.callbacks = callbacks if callbacks is not None else []
 
     @staticmethod
@@ -64,10 +64,10 @@ class ISTA(nn.Module):
         return x - x.clamp(min=-thresh, max=thresh)
 
     @staticmethod
-    def shrink_positive(x, thresh):
-        """Element-wise positive soft-thresholding.
+    def shrink_nonnegative(x, thresh):
+        """Element-wise nonnegative soft-thresholding.
 
-        For positive shrinkage, we want max(x - theta, 0), not max(|x| - theta, 0).
+        For nonnegative shrinkage, we want max(x - theta, 0), not max(|x| - theta, 0).
         This enforces non-negativity on the output while applying the threshold.
         """
         return F.relu(x - thresh)
@@ -92,9 +92,9 @@ class ISTA(nn.Module):
         return residual_gradient
 
     def get_shrink_func(self):
-        """Get shrinkage function based on positivity."""
-        if self.positive:
-            return self.shrink_positive
+        """Get shrinkage function based on the non-negativity constraint."""
+        if self.nonnegative:
+            return self.shrink_nonnegative
         return self.shrink
 
     def step(self, x, gradient, shrink_func, gamma, theta):

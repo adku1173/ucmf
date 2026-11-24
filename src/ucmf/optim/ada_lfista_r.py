@@ -12,8 +12,8 @@ from torch import nn
 class _ReducedTwoWeights(FISTA):
     """Update direction ``(M.T @ y - R.T @ (R @ z)) / m`` with congruences ``Br1`` (R) and ``Br2`` (M)."""
 
-    def __init__(self, *, num_mics, positive=True, callbacks=None, r_diag=False):
-        super().__init__(positive=positive, callbacks=callbacks)
+    def __init__(self, *, num_mics, nonnegative=True, callbacks=None, r_diag=False):
+        super().__init__(nonnegative=nonnegative, callbacks=callbacks)
         if num_mics <= int(r_diag):
             raise ValueError(f'num_mics must exceed {int(r_diag)} for r_diag={r_diag}, got {num_mics}.')
         self.num_mics, self.r_diag = num_mics, r_diag
@@ -74,7 +74,7 @@ class NA_AdaLFISTAR(NeuralAugmentation, _ReducedTwoWeights):
         gamma_init (float): initial applied step size of the controller readout.
         theta_init (float): initial applied soft-threshold of the controller readout.
         lstm_dim (int): hidden size of the LSTM controller (default 128).
-        positive (bool): enforce non-negativity via positive shrinkage.
+        nonnegative (bool): enforce non-negativity via nonnegative shrinkage.
         callbacks (list | None): optional callbacks; end callbacks get
             ``A``, ``W = M`` and ``W_recurrent = R``.
         r_diag (bool): whether the CSM diagonal is omitted; must match the operator.

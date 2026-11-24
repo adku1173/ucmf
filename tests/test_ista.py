@@ -14,7 +14,7 @@ import torch
 SOLVERS = [ISTA, FISTA]
 
 
-def numpy_reference(A, y, x0, lam, gamma, *, steps, positive, accelerated):
+def numpy_reference(A, y, x0, lam, gamma, *, steps, nonnegative, accelerated):
     """Independent, sample-wise matrix-vector implementation in NumPy.
 
     The default step is taken from ucmf (power-iteration estimate for the whole,
@@ -35,7 +35,7 @@ def numpy_reference(A, y, x0, lam, gamma, *, steps, positive, accelerated):
             threshold = step * lam[sample]
             next_x = (
                 np.maximum(proposal - threshold, 0)
-                if positive
+                if nonnegative
                 else np.sign(proposal) * np.maximum(np.abs(proposal) - threshold, 0)
             )
             if accelerated:
@@ -48,10 +48,10 @@ def numpy_reference(A, y, x0, lam, gamma, *, steps, positive, accelerated):
 
 
 @pytest.mark.parametrize('solver_type', SOLVERS)
-@pytest.mark.parametrize('positive', [True, False])
+@pytest.mark.parametrize('nonnegative', [True, False])
 @pytest.mark.parametrize('batched_A', [True, False])
 @pytest.mark.parametrize('default_gamma', [True, False])
-def test_matches_independent_numpy_iterations(solver_type, positive, batched_A, default_gamma):
+def test_matches_independent_numpy_iterations(solver_type, nonnegative, batched_A, default_gamma):
     rng = np.random.default_rng(17)
     A = rng.normal(size=(3, 5, 4) if batched_A else (5, 4))
     y = rng.normal(size=(3, 5))
@@ -59,7 +59,7 @@ def test_matches_independent_numpy_iterations(solver_type, positive, batched_A, 
     lam = np.array([0.0, 0.015, 0.03])
     gamma = None if default_gamma else np.array([0.07, 0.11, 0.15])
 
-    actual = solver_type(positive=positive)(
+    actual = solver_type(nonnegative=nonnegative)(
         torch.from_numpy(y),
         x0=torch.from_numpy(x0),
         operator=MatrixMult(torch.from_numpy(A)),
@@ -67,7 +67,7 @@ def test_matches_independent_numpy_iterations(solver_type, positive, batched_A, 
         gamma=None if gamma is None else torch.from_numpy(gamma),
         t=9,
     )
-    expected = numpy_reference(A, y, x0, lam, gamma, steps=9, positive=positive, accelerated=solver_type is FISTA)
+    expected = numpy_reference(A, y, x0, lam, gamma, steps=9, nonnegative=nonnegative, accelerated=solver_type is FISTA)
 
     torch.testing.assert_close(actual, torch.from_numpy(expected), rtol=1e-11, atol=1e-12)
     assert actual.dtype == torch.float64
@@ -80,38 +80,38 @@ def test_cmf_representations_agree_with_default_step(solver_type, batched):
     rng = torch.Generator().manual_seed(7)
     H = torch.randn((2, 3, 4) if batched else (3, 4), dtype=torch.complex128, generator=rng)
     y = torch.randn(2, 6, dtype=torch.float64, generator=rng)
-    solver = solver_type(positive=False)
+    solver = solver_type(nonnegative=False)
     expected = solver(y, operator=CMFDictionary(H, r_diag=True), lam=0.01, t=8)
     actual = solver(y, operator=CMFPropagation(H, r_diag=True), lam=0.01, t=8)
     torch.testing.assert_close(actual, expected, rtol=1e-11, atol=1e-12)
 
 
 @pytest.mark.parametrize('solver_type', SOLVERS)
-@pytest.mark.parametrize('positive', [True, False])
-def test_orthogonal_problem_has_analytic_lasso_solution(solver_type, positive):
+@pytest.mark.parametrize('nonnegative', [True, False])
+def test_orthogonal_problem_has_analytic_lasso_solution(solver_type, nonnegative):
     y = torch.tensor([1.0, -2.0, 0.01, -0.01], dtype=torch.float64)
     A = torch.eye(4, dtype=y.dtype)
     lam = 0.1
-    expected = (y - 4 * lam).clamp_min(0) if positive else y.sign() * (y.abs() - 4 * lam).clamp_min(0)
+    expected = (y - 4 * lam).clamp_min(0) if nonnegative else y.sign() * (y.abs() - 4 * lam).clamp_min(0)
 
-    actual = solver_type(positive=positive)(y, operator=MatrixMult(A), lam=lam, t=8)
+    actual = solver_type(nonnegative=nonnegative)(y, operator=MatrixMult(A), lam=lam, t=8)
 
     torch.testing.assert_close(actual, expected.unsqueeze(0))
 
 
 @pytest.mark.parametrize('solver_type', SOLVERS)
-@pytest.mark.parametrize('positive', [True, False])
-def test_solution_satisfies_normalized_lasso_kkt(solver_type, positive):
+@pytest.mark.parametrize('nonnegative', [True, False])
+def test_solution_satisfies_normalized_lasso_kkt(solver_type, nonnegative):
     rng = torch.Generator().manual_seed(5)
     A = torch.randn(9, 4, generator=rng, dtype=torch.float64)
     y = torch.randn(2, 9, generator=rng, dtype=torch.float64)
     lam = 0.015
-    x = solver_type(positive=positive)(y, operator=MatrixMult(A), lam=lam, t=1000)
+    x = solver_type(nonnegative=nonnegative)(y, operator=MatrixMult(A), lam=lam, t=1000)
     grad = ((x @ A.T - y) @ A) / A.shape[0]
     active = x.abs() > 1e-9
 
     torch.testing.assert_close(grad[active] + lam * x[active].sign(), torch.zeros_like(x[active]), atol=1e-9, rtol=0)
-    if positive:
+    if nonnegative:
         assert torch.all(x >= 0)
         assert torch.all(grad[~active] + lam >= -1e-9)
     else:
@@ -123,7 +123,7 @@ def test_gradient_normalization_and_explicit_column_scaling(solver_type):
     A = torch.tensor([[3.0, 0.0], [4.0, 2.0]])
     y = torch.ones(1, 2)
 
-    actual = solver_type(positive=False)(y, operator=MatrixMult(A), lam=0.0, gamma=1.0, t=1)
+    actual = solver_type(nonnegative=False)(y, operator=MatrixMult(A), lam=0.0, gamma=1.0, t=1)
 
     torch.testing.assert_close(actual, torch.tensor([[3.5, 1.0]]))
 
@@ -141,7 +141,7 @@ def test_scalar_and_per_sample_parameters(solver_type, parameter_form):
         return torch.full((2, 1), value, dtype=torch.float64)
 
     y = torch.tensor([[1.0, -2.0], [3.0, -4.0]], dtype=torch.float64)
-    actual = solver_type(positive=False)(
+    actual = solver_type(nonnegative=False)(
         y, operator=MatrixMult(torch.eye(2, dtype=y.dtype)), lam=parameter(0.1), gamma=parameter(1.0), t=1
     )
     expected = y.sign() * (y.abs() / 2 - 0.1).clamp_min(0)
@@ -169,7 +169,7 @@ def test_autograd_through_measurements_warm_start_and_step_parameters(solver_typ
     x0 = torch.tensor([[0.3, 0.2]], dtype=torch.float64, requires_grad=True)
     lam = torch.tensor(0.01, dtype=torch.float64, requires_grad=True)
     gamma = torch.tensor(0.2, dtype=torch.float64, requires_grad=True)
-    solver = solver_type(positive=False)
+    solver = solver_type(nonnegative=False)
 
     assert torch.autograd.gradcheck(
         lambda y, x0, lam, gamma: solver(y, x0=x0, operator=MatrixMult(A), lam=lam, gamma=gamma, t=4),
@@ -231,7 +231,7 @@ def test_forward_rejects_independent_gradient_weights(solver_type, weight):
 
 @pytest.mark.parametrize('solver_type', SOLVERS)
 def test_constructor_has_no_gradient_mode_selector(solver_type):
-    assert list(inspect.signature(solver_type.__init__).parameters) == ['self', 'positive', 'callbacks']
+    assert list(inspect.signature(solver_type.__init__).parameters) == ['self', 'nonnegative', 'callbacks']
     assert not hasattr(solver_type(), 'ls_mode')
     assert not hasattr(solver_type(), 'tls_grad')
 
@@ -253,7 +253,7 @@ def test_one_step_matches_normalized_adjoint_residual(solver_type, batched_A):
     x = torch.tensor([[0.2, 0.3], [0.1, 0.2]], dtype=A.dtype)
     residual = y - (A @ x.unsqueeze(-1)).squeeze(-1)
     expected = x + (residual.unsqueeze(-2) @ A).squeeze(-2) / y.shape[1]
-    actual = solver_type(positive=False)(y, x0=x, operator=MatrixMult(A), lam=0.0, gamma=1.0, t=1)
+    actual = solver_type(nonnegative=False)(y, x0=x, operator=MatrixMult(A), lam=0.0, gamma=1.0, t=1)
     torch.testing.assert_close(actual, expected)
 
 

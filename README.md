@@ -36,7 +36,7 @@ A = torch.eye(3)                     # real sensing matrix (m, n)
 operator = MatrixMult(A)
 y = torch.tensor([[1.0, 0.0, 0.5]])  # measurements (B, m)
 stopper = SolutionChangeStopper(tol=1e-6)
-solver = FISTA(positive=True, callbacks=[stopper])
+solver = FISTA(nonnegative=True, callbacks=[stopper])
 with torch.no_grad():
     x_hat = solver(y, operator=operator, lam=0.01, t=100)
 # x_hat has shape (B, n); ISTA has the same interface.
@@ -53,7 +53,7 @@ The solvers minimize
 min_x  ||y - A x||² / (2 m) + lam * ||x||₁
 ```
 
-`positive=True` additionally constrains `x >= 0` (the default).
+`nonnegative=True` additionally constrains `x >= 0` (the default).
 The negative LS gradient is `A.T @ (y - A @ x) / m`, the threshold is
 `gamma * lam`, and the default step size is `gamma = m / (1.05 * ||A||₂²)`,
 with the squared norm estimated by 50 power iterations.
@@ -78,10 +78,8 @@ operator = MatrixMult(torch.as_tensor(A, dtype=y.dtype, device=y.device))
 # Likewise prepare x0 and tensor-valued lam/gamma, if supplied.
 ```
 
-There is **no implicit column normalization**. If desired, use
-`normalize_sensing_matrix_columns(A)` and explicitly transform coordinates
-`z = x * column_norms`, then recover `x = z / column_norms` after solving.
-Regularization then acts on `z`, not on the unscaled physical source powers.
+There is **no column normalization**; regularization acts on the unscaled
+source powers. Normalization will be revisited later.
 For CMF inputs, `A` and `y` must use the same vectorization, row ordering,
 diagonal-removal setting, and off-diagonal weights (the source repo uses
 `sqrt(2)` weights). The core solvers do not construct or vectorize CSMs; with
@@ -147,7 +145,7 @@ bf = ac.BeamformerCMF(freq_data=ps, steer=st, problem=problem)
   iterations run without callbacks. Setting `tol` enables
   `SolutionChangeStopper(tol=tol, check_every=check_every)`. All traits enter
   the solver digest, so Acoular's caching distinguishes configurations.
-- The problem must be an `L1RegularizedLeastSquaresProblem`: positivity comes
+- The problem must be an `L1RegularizedLeastSquaresProblem`: non-negativity comes
   from `problem.nonnegative`, and the regularization is
   `lam = problem.alpha * problem.unit_mult`, matching Acoular's LassoLars
   convention. The ucmf objective equals scikit-learn's Lasso objective, so
