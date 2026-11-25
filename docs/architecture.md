@@ -64,6 +64,19 @@ A → normalize_operator → (D = A U^-1, u) → solver(y, operator=D) → x →
 
 `compile_unrolled(model, t_max)` compiles once and returns all iterates `(t_max, B, n)`;
 stage `t` uses `out[t - 1]`. All models compile to one graph without host syncs.
+`all_iterates(model, y, t)` is the eager counterpart.
+
+## Training
+
+```text
+train_model: normalize_operator → prepare_data (equireg) → build_loss, build_solve
+  per step: objective(solve, y, q, t, D, u) → solve(y, D, t) = iterates (t, B, n) → weighted_mean
+```
+
+- One function per objective in `OBJECTIVES` (`nmse`, `lasso`, `bic`, `cv`); `build_loss`
+  binds `loss_kwargs`, `w`, and the CV generator ([0010](adr/0010-training-objectives.md)).
+- `build_solve` uses `compile_unrolled(model, stages)[:t]` (`compile=True`) or `all_iterates`.
+- CV splits `rows`, `complex_rows`, `mics`, `mics_cross` return `(op_t, train_rows, val_rows)`.
 
 ## Tests
 

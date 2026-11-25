@@ -142,6 +142,28 @@ For subsets, use `D.select_rows(...)` or `select_mics(...)` and align `y` with
 `D.rows`; the column norms of the full operator stay valid for `to_source`. `compile_unrolled(model, t_max)` compiles once for all depths. See the
 [architecture guide](docs/architecture.md).
 
+## Training
+
+`ucmf.train` (extra `train`, Ray Tune) trains an unfolded model stage by stage
+(`t = 1..stages`). It normalizes the operator, equiregularizes the data
+(`data_scaling='equireg'`), and compiles one graph for all stages (`compile=True`):
+
+```python
+from ucmf.train import TrainingConfig, train_model
+
+config = TrainingConfig(
+    model_name='NA_AdaLFISTASW', model_kwargs={'num_measurements': m, 'gamma_init': 0.3, 'theta_init': 0.01},
+    operator_name='CMFPropagation', operator_kwargs={'H': H},
+    loss='cv', loss_kwargs={'split': 'mics_cross'}, w=0.5,
+)
+result = train_model(config, y_train=y_train, y_val=y_val)  # q_train/q_val for 'nmse'
+```
+
+Objectives: `nmse` (supervised), `lasso` (`lam`), `bic` (`alpha=1e-2`), and `cv`
+(`split` in `rows`, `complex_rows`, `mics`, `mics_cross`; `train_ratio=0.8`). With
+`w > 0`, earlier iterates enter with normalized weights `w^(t-k)`. See
+[ADR 0010](docs/adr/0010-training-objectives.md).
+
 ## Acoular integration
 
 `ucmf.acoular` provides ISTA and FISTA as custom solvers for Acoular's
