@@ -35,13 +35,12 @@ Changed: the default step `1 / L`, `L = 1.05 ||A||₂² / m`, uses 50 power iter
   `operator=MatrixMult(A)`, `CMFDictionary`, or `CMFPropagation`. `select_rows` /
   `select_mics` replace `msm_subset` / `measurement_indices`; align `y` with `operator.rows`.
 - No silent conversion: inputs must share `y`'s dtype and device; place models with `model.to(...)`.
-- Classical forward takes no `W`; unfolded models own their forward
-  ([0002](adr/0002-classical-forward-without-weights.md)).
+- Classical forward takes no `W`; unfolded models own their forward.
 - Renamed: `positive` → `nonnegative`, `n_*` → `num_*` (`num_iterations`, `num_measurements`,
   `num_mics`), `n_steps` → `num_steps`. Unfolded constructors are keyword-only.
 - Removed: `ls_mode`/TLS, `A_init`, `solver.y` (use the `y` callback keyword),
   `normalize_sensing_matrix_columns`, `default_gamma_from_A`, and the state framework
-  ([0001](adr/0001-explicit-iteration-state.md), superseded by [0003](adr/0003-local-loops-and-ls-only.md)).
+  (explicit local loops instead).
 - NA models: call `init_normalizers` once before solving (FA2026 did this lazily).
 - Custom subclasses override `_make_gradient(y, operator, weight_operator)` instead of
   `ls_grad` / `get_grad_func`, see [architecture](architecture.md).
