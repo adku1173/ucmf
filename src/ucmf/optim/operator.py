@@ -18,7 +18,6 @@ from .utils import validate_tensor
 
 import torch
 import torch.nn.functional as F
-from torch import nn
 
 
 def _validate_index(index, name, device, batch_size):
@@ -242,6 +241,25 @@ class MatrixMult(LinearOperator):
         matrix = _take(self.matrix, index, self.matrix.ndim - 1, self.batch_size is not None)
         return self._with_matrix(matrix, rows=self.rows)  # measurement rows are unchanged
 
+    def select_problems(self, index):
+        """Select problems of a per-problem operator (a dictionary bank).
+
+        Preconditions: the operator is per problem, ``rows`` is None or shared, and a
+        tensor ``index`` is an integer tensor on the operator's device.
+
+        Parameters
+        ----------
+        index : Tensor or int
+            Problem indices ``(B,)`` for a per-problem result, or one index (int or 0-dim) for a
+            shared one.
+
+        Returns
+        -------
+        MatrixMult
+            Operator of ``matrix[index]``.
+        """
+        return self._with_matrix(self.matrix[index], rows=self.rows)
+
 
 class _AuxiliaryOperator(LinearOperator):
     """Composition ``W = B @ A`` without materializing the product."""
@@ -263,7 +281,7 @@ class _AuxiliaryOperator(LinearOperator):
         return _AuxiliaryOperator(self.operator.detached(), self.weight.detached())
 
 
-class HermitianVectorization(nn.Module):
+class HermitianVectorization:
     """Linear operator ``hvec`` from Hermitian ``c x c`` matrices to ``R^m``.
 
     A Hermitian matrix ``S`` is given by its real (symmetric) and imaginary
@@ -277,7 +295,10 @@ class HermitianVectorization(nn.Module):
 
     With ``r_diag=True`` the diagonal is dropped (``m = c (c - 1)``); the
     adjoint then returns a zero diagonal. Without it, ``m = c**2``.
-    Index buffers move with ``.to(device)``; weights use the input dtype.
+    The index tensors live on ``device``; weights use the input dtype. It is a plain
+    object, not an ``nn.Module``: compiled graphs with CUDA graphs treat module buffers
+    as static inputs and re-record whenever a derived operator brings new ones.
+    Plain tensors are ordinary inputs, copied per replay.
 
     Parameters
     ----------
@@ -285,6 +306,8 @@ class HermitianVectorization(nn.Module):
         Number of microphones ``c``.
     r_diag : bool, optional
         If True, drop the diagonal (default False).
+    device : torch.device or str, optional
+        Device of the index tensors (default CPU).
 
     Attributes
     ----------
@@ -294,17 +317,14 @@ class HermitianVectorization(nn.Module):
         Number of leading real entries.
     """
 
-    def __init__(self, num_mics, r_diag=False):
-        super().__init__()
+    def __init__(self, num_mics, r_diag=False, device=None):
         self.num_mics = num_mics
         # Lower triangle of S.T at (row, col) holds S[col, row]: i = col, j = row.
-        rows, cols = torch.tril_indices(num_mics, num_mics)
+        rows, cols = torch.tril_indices(num_mics, num_mics, device=device)
         off_diagonal = rows != cols
         keep_real = off_diagonal if r_diag else torch.ones_like(off_diagonal)
-        self.register_buffer('real_i', cols[keep_real], persistent=False)
-        self.register_buffer('real_j', rows[keep_real], persistent=False)
-        self.register_buffer('imag_i', cols[off_diagonal], persistent=False)
-        self.register_buffer('imag_j', rows[off_diagonal], persistent=False)
+        self.real_i, self.real_j = cols[keep_real], rows[keep_real]
+        self.imag_i, self.imag_j = cols[off_diagonal], rows[off_diagonal]
         self.num_real = int(keep_real.sum())
         self.num_measurements = self.num_real + int(off_diagonal.sum())
 
@@ -329,7 +349,7 @@ class HermitianVectorization(nn.Module):
         imag = reference.new_full((self.num_measurements - self.num_real,), math.sqrt(2.0))
         return torch.cat((self._real_weights(reference), imag))
 
-    def forward(self, real, imag):
+    def __call__(self, real, imag):
         """Vectorize Hermitian matrices; Hermitian symmetry is assumed, not checked.
 
         Parameters
@@ -436,7 +456,7 @@ class CMFPropagation(LinearOperator):
         if c <= int(r_diag) or n == 0:
             raise ValueError('H must define nonempty measurement and source dimensions.')
         self.H, self.r_diag = H, r_diag
-        self.hvec = HermitianVectorization(c, r_diag=r_diag).to(H.device)
+        self.hvec = HermitianVectorization(c, r_diag=r_diag, device=H.device)
         self.shape = (self.hvec.num_measurements, n)
         self._num_measurements_total, self._num_mics_total = self.shape[0], c
         self.dtype, self.device = H.real.dtype, H.device
@@ -544,6 +564,13 @@ class CMFPropagation(LinearOperator):
         op.rows = self._subset_rows(torch.cat((real_rows, imag_rows), dim=-1))
         return op
 
+    def select_problems(self, index):
+        """Select problems of a per-problem ``H``, see :meth:`MatrixMult.select_problems`.
+
+        Preconditions as there; ``rows`` and ``mics`` are None or shared and stay unchanged.
+        """
+        return self._with_propagation(self.H[index])
+
     def mic_rows(self, index):
         """Return ``select_mics(index).rows``, the original rows of a microphone block."""
         return self.select_mics(index).rows
@@ -638,6 +665,13 @@ class CMFDictionary(MatrixMult):
             Dictionary of the subarray.
         """
         return self._derived(self._propagation.select_mics(index))
+
+    def select_problems(self, index):
+        """Select problems from ``H`` and the cached dictionary without rebuilding it.
+
+        See :meth:`MatrixMult.select_problems`.
+        """
+        return self._derived(self._propagation.select_problems(index), self.matrix[index])
 
     def mic_rows(self, index):
         """Return the rows of a microphone block without building its dictionary.

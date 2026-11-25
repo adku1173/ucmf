@@ -20,6 +20,7 @@ MODEL_NAMES = (
 LOSSES = tuple(OBJECTIVES)
 SUPERVISED_LOSSES = ('nmse',)
 DATA_SCALINGS = ('none', 'equireg')
+BATCH_SAMPLINGS = ('random', 'per_dictionary')
 OPERATOR_NAMES = ('MatrixMult', 'CMFDictionary', 'CMFPropagation')
 PRECISIONS = ('float32', 'float64', 'bfloat16')
 
@@ -50,6 +51,10 @@ class TrainingConfig:
         Objective of :mod:`ucmf.train.objectives`; 'nmse' (default) needs source targets.
     loss_kwargs : dict
         Keyword-only parameters of the objective besides ``w``, e.g. ``{'lam': 0.1}`` for 'lasso'.
+    batch_sampling : str
+        'random' (default) or 'per_dictionary'. With a dictionary bank, 'random' batches
+        mix bank entries (one dictionary per sample), 'per_dictionary' batches draw all
+        samples from one entry (one dictionary per batch).
     w : float
         Weight base in ``[0, 1]`` of earlier iterates: iterate ``k`` of depth ``t`` enters
         with ``w ** (t - k)``; 0 (default) uses only the final iterate.
@@ -82,6 +87,7 @@ class TrainingConfig:
     learning_rate: float = 1e-3
     loss: str = 'nmse'
     loss_kwargs: dict = field(default_factory=dict)
+    batch_sampling: str = 'random'
     w: float = 0.0
     data_scaling: str = 'equireg'
     val_every: int = 1
@@ -109,6 +115,8 @@ class TrainingConfig:
             )
         if not 0 <= self.w <= 1:
             raise ValueError(f'w must lie in [0, 1], got {self.w}.')
+        if self.batch_sampling not in BATCH_SAMPLINGS:
+            raise ValueError(f'batch_sampling must be one of {BATCH_SAMPLINGS}, got {self.batch_sampling!r}.')
         if self.data_scaling not in DATA_SCALINGS:
             raise ValueError(f'data_scaling must be one of {DATA_SCALINGS}, got {self.data_scaling!r}.')
         if self.loss == 'cv' and self.loss_kwargs.get('split', 'rows') not in SPLITS:  # 'rows': cv_loss default

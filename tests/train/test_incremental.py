@@ -53,7 +53,7 @@ def test_best_val_loss_belongs_to_last_stage(problem):
 def test_batches_are_full_and_without_replacement_per_epoch():
     config = make_config(torch.eye(M, dtype=torch.float64), batch_size=5)
     batches = iterate_batches(config, N_SAMPLES)
-    epoch = [next(batches) for _ in range(3)]  # 16 // 5 full batches, one index dropped
+    epoch = [next(batches)[0] for _ in range(3)]  # 16 // 5 full batches, one index dropped
     assert all(batch.shape == (5,) for batch in epoch)
     assert len(set(torch.cat(epoch).tolist())) == 15
 

@@ -73,6 +73,17 @@ def test_column_norms_of_row_subset_use_active_rows(operator, matrix, rows):
     torch.testing.assert_close(operator.select_rows(rows).column_norms().expand_as(expected), expected)
 
 
+@pytest.mark.parametrize('index', [torch.tensor([2, 0, 2]), torch.tensor(1)], ids=['per-problem', 'shared'])
+@parametrize_with_cases(OPERATOR, cases=OperatorCases)
+def test_select_problems_takes_bank_entries(operator, matrix, index):
+    if operator.batch_size is None:
+        pytest.skip('select_problems needs a per-problem operator')
+    selected = operator.select_problems(index)
+    assert type(selected) is type(operator) and selected.rows is None
+    assert selected.batch_size == (None if index.ndim == 0 else index.numel())
+    assert_matches_on_random_inputs(selected, matrix[index])
+
+
 def random_scale(matrix, per_problem):
     shape = (BATCH_SIZE, matrix.shape[-1]) if per_problem else (matrix.shape[-1],)
     return torch.rand(shape, dtype=matrix.dtype, generator=torch.Generator().manual_seed(3)) + 0.5
@@ -343,10 +354,10 @@ def test_matches_acoular_ordering_up_to_row_weights(r_diag):
 
 
 def test_follows_device_and_dtype():
-    hvec = HermitianVectorization(C).to(torch.float32)
+    hvec = HermitianVectorization(C)
     real, imag = (part.float() for part in random_hermitian())
     assert hvec(real, imag).dtype == torch.float32
     assert hvec.adjoint(hvec(real, imag))[0].dtype == torch.float32
     if torch.cuda.is_available():
-        hvec = hvec.cuda()
-        torch.testing.assert_close(hvec(real.cuda(), imag.cuda()).cpu(), hvec.cpu()(real, imag))
+        on_cuda = HermitianVectorization(C, device='cuda')
+        torch.testing.assert_close(on_cuda(real.cuda(), imag.cuda()).cpu(), hvec(real, imag))

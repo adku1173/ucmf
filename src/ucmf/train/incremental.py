@@ -57,7 +57,7 @@ def train_model(config, *, y_train, y_val, q_train=None, q_val=None):
         History, best validation loss of the last stage, and the trained state.
     """
     operator, column_norms = normalize_operator(build_operator(config))
-    y_train, y_val, q_train, q_val = prepare_data(config, operator, y_train, y_val, q_train, q_val)
+    y_train, y_val, q_train, q_val, _, _ = prepare_data(config, operator, y_train, y_val, q_train, q_val)
     model = build_model(config)
     objective = build_loss(config)
     solve = build_solve(config, model)
@@ -73,7 +73,7 @@ def train_model(config, *, y_train, y_val, q_train=None, q_val=None):
         stage_best_val_loss = float('inf')
         for step in range(1, config.steps_per_stage + 1):
             optimizer.zero_grad()
-            indices = next(batches)
+            indices, _ = next(batches)
             y_batch = y_train[indices]
             q_batch = q_train[indices] if config.supervised else None
             loss = objective(solve, y_batch, q_batch, stage, operator, column_norms)

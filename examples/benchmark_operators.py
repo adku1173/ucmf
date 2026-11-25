@@ -1,7 +1,7 @@
 """Benchmark ucmf operators on CUDA; run with --help for filters.
 
-Timing includes the solve and, for Ada models, parameter gradients. Operator
-construction and step-size estimation are excluded. Distinct dictionaries use
+Timing includes the solve and, for learned models, parameter gradients. Operator
+construction, step-size estimation and the NA feature normalization are excluded. Distinct dictionaries use
 two alternating same-shape batches; shared dictionaries reuse the operator.
 Each case and execution mode runs in a fresh process. Peak allocated and
 reserved memory are measured during warm timing, including live inputs and
@@ -15,23 +15,38 @@ from multiprocessing import get_context
 from statistics import median
 from time import perf_counter
 
-from ucmf import FISTA, ISTA, AdaLFISTA, AdaLFISTAR, AdaLFISTASW, AdaLFISTASWR
-from ucmf.optim.operator import CMFDictionary, CMFPropagation, MatrixMult
+from ucmf import (
+    FISTA,
+    ISTA,
+    AdaLFISTA,
+    AdaLFISTAR,
+    AdaLFISTASW,
+    AdaLFISTASWR,
+    NA_AdaLFISTA,
+    NA_AdaLFISTAR,
+    NA_AdaLFISTASW,
+    NA_AdaLFISTASWR,
+)
+from ucmf.optim.operator import CMFDictionary, CMFPropagation
 from ucmf.optim.utils import default_gamma_from_operator
 
 import torch
 
-MODELS = {model.__name__: model for model in (ISTA, FISTA, AdaLFISTASW, AdaLFISTA, AdaLFISTASWR, AdaLFISTAR)}
+MODELS = {model.__name__: model for model in (
+    ISTA, FISTA, AdaLFISTASW, AdaLFISTA, AdaLFISTASWR, AdaLFISTAR,
+    NA_AdaLFISTASW, NA_AdaLFISTA, NA_AdaLFISTASWR, NA_AdaLFISTAR,
+)}
 CLASSICAL = (ISTA, FISTA)
-REDUCED = (AdaLFISTASWR, AdaLFISTAR)
-DENSE_WEIGHTS = (AdaLFISTASW, AdaLFISTA)
-OPERATORS = ('MatrixMult', 'CMFDictionary', 'CMFPropagation')
+REDUCED = (AdaLFISTASWR, AdaLFISTAR, NA_AdaLFISTASWR, NA_AdaLFISTAR)
+DENSE_WEIGHTS = (AdaLFISTASW, AdaLFISTA, NA_AdaLFISTASW, NA_AdaLFISTA)
+NEURAL = (NA_AdaLFISTASW, NA_AdaLFISTA, NA_AdaLFISTASWR, NA_AdaLFISTAR)
+OPERATORS = ('CMFDictionary', 'CMFPropagation')
+GRID = {16: 16, 64: 51}  # grid side per array, as ucmf_data.parameters.default_focus_grid
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--mics', nargs='+', type=int, choices=(16, 64), default=[16, 64])
-    parser.add_argument('--grid', nargs='+', type=int, choices=(16, 64), default=[16, 64], help='grid side length')
+    parser.add_argument('--mics', nargs='+', type=int, choices=tuple(GRID), default=list(GRID), help='grid: see GRID')
     parser.add_argument('--batch', nargs='+', type=int, choices=(1, 32, 512), default=[1, 32, 512])
     parser.add_argument('--layout', nargs='+', choices=('shared', 'distinct'), default=['shared', 'distinct'])
     parser.add_argument('--model', nargs='+', choices=MODELS, default=list(MODELS))
@@ -48,14 +63,13 @@ def parse_args():
 
 
 def cases(args):
-    for c, grid, batch, layout, name, representation in product(
-        args.mics, args.grid, args.batch, args.layout, args.model, args.operator,
+    for c, batch, layout, name, representation in product(
+        args.mics, args.batch, args.layout, args.model, args.operator,
     ):
-        if (batch == 1 and layout == 'distinct') or (batch == 512 and (c, grid) != (16, 16)):
+        grid = GRID[c]
+        if (batch == 1 and layout == 'distinct') or (batch == 512 and c != 16):
             continue
         model_type = MODELS[name]
-        if model_type in REDUCED and representation == 'MatrixMult':
-            continue  # The reduced models need the CMF coordinate metadata.
         if model_type not in DENSE_WEIGHTS:
             weights = ['—' if model_type in CLASSICAL else 'factored']
         else:
@@ -84,33 +98,33 @@ def represent(inputs, representation):
     result = []
     for y, propagation in inputs:
         if propagation not in dense:
-            dictionary = CMFDictionary(propagation.H, r_diag=propagation.r_diag)
-            dense[propagation] = MatrixMult(dictionary.matrix) if representation == 'MatrixMult' else dictionary
+            dense[propagation] = CMFDictionary(propagation.H, r_diag=propagation.r_diag)
         result.append((y, dense[propagation]))
     return result
 
 
-def make_step(model_type, c, propagation, steps, weight_mode, gamma):
+def make_model(model_type, c, propagation, steps, weight_mode, gamma):
+    """Return the solver and its call arguments; learned weight matrices are perturbed."""
     theta = 0.01
     if model_type in CLASSICAL:
-        model = model_type(nonnegative=False)
-        kwargs = {'gamma': gamma, 'lam': theta / gamma}
-    else:
-        kwargs = {'weight_mode': weight_mode} if model_type in DENSE_WEIGHTS else {}
-        size = {'num_mics': c, 'r_diag': propagation.r_diag} if model_type in REDUCED else {
-            'num_measurements': propagation.shape[0],
-        }
-        model = model_type(
-            num_iterations=steps, gamma_init=gamma, theta_init=theta, nonnegative=False, **size, **kwargs
-        ).cuda()
-        kwargs = {}
-        rng = torch.Generator(device='cuda').manual_seed(8)
-        with torch.no_grad():
-            for parameter in model.parameters():
-                if parameter.ndim == 2:
-                    noise = torch.randn(parameter.shape, device=parameter.device, generator=rng)
-                    parameter.add_(noise, alpha=0.05 / sqrt(parameter.shape[1]))
+        return model_type(nonnegative=False), {'gamma': gamma, 'lam': theta / gamma}
+    kwargs = {'weight_mode': weight_mode} if model_type in DENSE_WEIGHTS else {}
+    if model_type not in NEURAL:
+        kwargs['num_iterations'] = steps
+    size = {'num_mics': c, 'r_diag': propagation.r_diag} if model_type in REDUCED else {
+        'num_measurements': propagation.shape[0],
+    }
+    model = model_type(gamma_init=gamma, theta_init=theta, nonnegative=False, **size, **kwargs).cuda()
+    rng = torch.Generator(device='cuda').manual_seed(8)
+    with torch.no_grad():
+        for parameter in model.parameters():
+            if parameter.ndim == 2:
+                noise = torch.randn(parameter.shape, device=parameter.device, generator=rng)
+                parameter.add_(noise, alpha=0.05 / sqrt(parameter.shape[1]))
+    return model, {}
 
+
+def make_step(model, steps, kwargs):
     def solve(y, operator):
         return model(y, operator=operator, t=steps, **kwargs)
 
@@ -171,12 +185,20 @@ def run(args, case, mode, *, header):
         source = make_inputs(c, grid, batch, layout, not args.keep_diagonal, rng)
         propagation = source[0][1]
         gamma = 0.6 * float(default_gamma_from_operator(propagation).min())
-        solve, step = make_step(model_type, c, propagation, args.steps, 'factored', gamma)
+        model, kwargs = make_model(model_type, c, propagation, args.steps, 'factored', gamma)
+        if model_type in NEURAL:
+            # Shared batches use one operator, so both enter the normalization (nonzero spread at batch 1).
+            y = torch.cat([y for y, _ in source]) if layout == 'shared' else source[0][0]
+            model.init_normalizers(y, propagation)
+        solve, step = make_step(model, args.steps, kwargs)
         references = [tuple(value.cpu() for value in step(solve, data)) for data in source]
         if weight == 'precomputed':
-            # The same seed initializes identical parameters in both modes.
-            del solve, step
-            solve, step = make_step(model_type, c, propagation, args.steps, weight, gamma)
+            # Same parameters and feature normalization as the reference model.
+            state = model.state_dict()
+            del model, solve, step
+            model, kwargs = make_model(model_type, c, propagation, args.steps, weight, gamma)
+            model.load_state_dict(state)
+            solve, step = make_step(model, args.steps, kwargs)
         inputs = represent(source, representation)
         del source, propagation
     except torch.OutOfMemoryError:
