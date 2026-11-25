@@ -1,11 +1,12 @@
 """Training throughput of ucmf's unfolded models on CUDA; run with --help for filters.
 
-One training step is timed as in ``ucmf.train.train_model``: objective (solve, loss),
-backward and Adam step, alternating between two batches. The operator is column normalized
-and the data are equiregularized beforehand (not timed). Dictionary layouts: ``shared`` uses
-one operator for all samples (as ``train_model`` today); ``per_batch`` and ``distinct`` select
-from a bank of ``--bank`` random dictionaries (e.g. one per stored frequency bin) one entry per
-batch or one per sample; this selection is timed with the step. Throughput is
+One training step is timed as in ``ucmf.train.train_model``: drawing the next batch, selecting
+its dictionaries, objective (solve, loss), backward and Adam step, on a dataset of eight batches.
+The operator is column normalized and the data are equiregularized beforehand (not timed).
+Dictionary layouts: ``shared`` uses one operator for all samples; ``per_batch``
+(``batch_sampling='per_dictionary'``) and ``distinct`` (``'random'``) select from a bank of
+``--bank`` random dictionaries (e.g. one per stored frequency bin) one entry per batch or one
+per sample. Throughput is
 ``batch / median step time`` at the first stage (t = 1) and the last stage (t = T).
 Compiled steps compute all T iterations at every stage. Each case and execution mode
 runs in a fresh process; peak memory is measured during warm timing at t = T.
@@ -26,7 +27,15 @@ from ucmf.scaling import normalize_operator
 from ucmf.train import TrainingConfig
 from ucmf.train.config import MODEL_NAMES, OPERATOR_NAMES
 from ucmf.train.objectives import build_loss
-from ucmf.train.utils import build_model, build_operator, build_optimizer, build_solve, prepare_data
+from ucmf.train.utils import (
+    batch_operator,
+    build_model,
+    build_operator,
+    build_optimizer,
+    build_solve,
+    iterate_batches,
+    prepare_data,
+)
 
 import torch
 
@@ -35,6 +44,7 @@ LOSSES = ('nmse', 'lasso', 'bic', 'cv:rows', 'cv:complex_rows', 'cv:mics', 'cv:m
 LOSS_KWARGS = {'lasso': {'lam': 0.1}}
 GRID = {16: 16, 64: 51}  # grid side per array, as ucmf_data.parameters.default_focus_grid
 LAYOUTS = ('shared', 'per_batch', 'distinct')
+NUM_BATCHES = 8  # dataset size in batches; the step draws batches as in train_model
 
 
 def parse_args():
@@ -81,7 +91,7 @@ def cases(args):
 
 
 def make_config(args, case, mode, H, r_diag):
-    c, _, model, operator, weight, loss, w = case
+    c, layout, model, operator, weight, loss, w = case
     gamma = float(default_gamma_from_operator(normalize_operator(CMFPropagation(H, r_diag))[0]).min())
     model_kwargs = {'gamma_init': gamma, 'theta_init': 0.01}
     if model in REDUCED:
@@ -102,61 +112,60 @@ def make_config(args, case, mode, H, r_diag):
         loss=name,
         loss_kwargs={'split': split} if split else LOSS_KWARGS.get(name, {}),
         w=w,
+        batch_sampling='per_dictionary' if layout == 'per_batch' else 'random',
         device='cuda',
         compile=mode == 'compiled',
     )
 
 
-def make_batches(args, layout, n, rng):
-    """Two batches ``(index, q)``; the index selects bank entries (None for shared)."""
-    batches = []
-    for _ in range(2):
-        q = torch.randn(args.batch, n, device='cuda', generator=rng).sub_(1).relu_()
-        if layout == 'shared':
-            index = None
-        elif layout == 'per_batch':
-            index = torch.randint(args.bank, (), device='cuda', generator=rng)
-        else:
-            index = torch.randint(args.bank, (args.batch,), device='cuda', generator=rng)
-        batches.append((index, q))
-    return batches
+def make_dataset(args, layout, n, rng):
+    """``NUM_BATCHES`` batches of sources ``q`` and their bank entries (None for shared).
+
+    'per_batch' gives every batch its own entry, 'distinct' every sample a random one.
+    """
+    num_samples = NUM_BATCHES * args.batch
+    q = torch.randn(num_samples, n, device='cuda', generator=rng).sub_(1).relu_()
+    if layout == 'shared':
+        return q, None
+    if layout == 'per_batch':
+        return q, torch.randint(args.bank, (NUM_BATCHES,), device='cuda', generator=rng).repeat_interleave(args.batch)
+    return q, torch.randint(args.bank, (num_samples,), device='cuda', generator=rng)
 
 
-def measure(args, config, batches):
+def measure(args, config, q, index):
     bank, column_norms = normalize_operator(build_operator(config))
-
-    def select(index):
-        return (bank, column_norms) if index is None else (bank.select_problems(index), column_norms[index])
-
-    data = []
-    for index, q in batches:  # measure with each sample's dictionary (A q = D U q), then equiregularize
-        operator, norms = select(index)
-        y = operator.forward(q * norms)
-        y, _, q, _, _, _ = prepare_data(config, operator, y, y, q, q)
-        data.append((index, y, q))
+    y = []
+    for i in range(0, q.shape[0], args.batch):  # measure every sample with its own dictionary, A q = D U q
+        problems = None if index is None else index[i : i + args.batch]
+        operator, norms = batch_operator(bank, column_norms, problems)
+        y.append(operator.forward(q[i : i + args.batch] * norms))
+    y = torch.cat(y)
+    y, q, index = prepare_data(config, bank, y, q, index)
     model = build_model(config)
     if isinstance(model, NeuralAugmentation):
-        model.init_normalizers(data[0][1], select(data[0][0])[0])
+        problems = None if index is None else index[: args.batch]
+        model.init_normalizers(y[: args.batch], batch_operator(bank, column_norms, problems)[0])
     objective, solve, optimizer = build_loss(config), build_solve(config, model), build_optimizer(config, model)
+    batches = iterate_batches(config, y.shape[0], index)
 
-    def timed(t, i):
-        index, y, q = data[i]
+    def timed(t):
         start = perf_counter()
-        operator, norms = select(index)  # bank selection is part of the step
+        samples, problems = next(batches)  # batch drawing and bank selection are part of the step
+        operator, norms = batch_operator(bank, column_norms, problems)
         optimizer.zero_grad()
-        objective(solve, y, q, t, operator, norms).backward()
+        objective(solve, y[samples], q[samples], t, operator, norms).backward()
         optimizer.step()
         torch.cuda.synchronize()
         return perf_counter() - start
 
-    first = timed(args.stages, 0)
-    for i in range(6):
-        timed(args.stages, i % 2), timed(1, i % 2)
+    first = timed(args.stages)
+    for _ in range(6):
+        timed(args.stages), timed(1)
     torch.cuda.reset_peak_memory_stats()
-    last = median(timed(args.stages, i % 2) for i in range(args.repeats))
+    last = median(timed(args.stages) for _ in range(args.repeats))
     allocated = torch.cuda.max_memory_allocated() / 2**20
     reserved = torch.cuda.max_memory_reserved() / 2**20
-    stage1 = median(timed(1, i % 2) for i in range(args.repeats))
+    stage1 = median(timed(1) for _ in range(args.repeats))
     return f'{args.batch / stage1:.0f} | {args.batch / last:.0f} | {first:.1f} | {allocated:.0f} | {reserved:.0f}'
 
 
@@ -175,7 +184,7 @@ def run(args, case, mode, *, header):
     r_diag = not args.keep_diagonal
     try:
         config = make_config(args, case, mode, H, r_diag)
-        metrics = measure(args, config, make_batches(args, layout, H.shape[-1], rng))
+        metrics = measure(args, config, *make_dataset(args, layout, n, rng))
     except torch.OutOfMemoryError:
         metrics = 'OOM | — | — | — | —'
     print(f'| {c} | {n} | ' + ' | '.join(map(str, case[1:])) + f' | {mode} | {metrics} |', flush=True)

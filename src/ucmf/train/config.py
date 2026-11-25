@@ -38,7 +38,9 @@ class TrainingConfig:
     operator_name : str
         'MatrixMult', 'CMFDictionary' or 'CMFPropagation'; built by ``build_operator``.
     operator_kwargs : dict
-        Keyword arguments of the operator constructor, e.g. ``{'matrix': A}``.
+        Keyword arguments of the operator constructor, e.g. ``{'matrix': A}``. A leading
+        dimension ``K`` (``matrix`` ``(K, m, n)``, ``H`` ``(K, c, n)``) makes the operator a
+        dictionary bank, see ``batch_sampling``.
     stages : int
         Number of incremental stages; stage ``t`` trains at solver depth ``t``.
     steps_per_stage : int
@@ -52,9 +54,29 @@ class TrainingConfig:
     loss_kwargs : dict
         Keyword-only parameters of the objective besides ``w``, e.g. ``{'lam': 0.1}`` for 'lasso'.
     batch_sampling : str
-        'random' (default) or 'per_dictionary'. With a dictionary bank, 'random' batches
-        mix bank entries (one dictionary per sample), 'per_dictionary' batches draw all
-        samples from one entry (one dictionary per batch).
+        How training batches are drawn, 'random' (default) or 'per_dictionary'.
+
+        Data layout: without a bank, one operator serves all samples. With a bank of ``K``
+        dictionaries (e.g. one per frequency bin), :func:`~ucmf.train.train_model` gets
+        ``index_train`` ``(N,)`` and ``index_val`` ``(M,)``: the bank entry of every row of
+        ``y``/``q``. The rows may be in any order (e.g. grouped by frequency). How often an
+        entry occurs is the sample distribution that training sees, so a weighting such as
+        log-uniform frequencies belongs into the data (number of rows per entry), not here.
+
+        'random': every epoch permutes all samples and splits them into full batches. A
+        batch mixes entries in proportion to their row counts; every sample is solved with
+        its own dictionary (a per-problem operator ``(B, ...)``). Works with and without a
+        bank.
+
+        'per_dictionary': every epoch groups the shuffled samples by entry, splits each
+        group into full batches, and shuffles the batch order. All samples of a batch share
+        one dictionary (a shared operator, which is cheaper per step). An entry contributes
+        ``count // batch_size`` batches: its incomplete batch is dropped and entries with
+        fewer than ``batch_size`` rows are never trained, which skews small datasets toward
+        frequent entries. Requires a bank with at least one entry of ``batch_size`` rows.
+
+        Validation ignores this setting and always uses mixed batches (one dictionary per
+        sample), see :func:`~ucmf.train.utils.validation_batches`.
     w : float
         Weight base in ``[0, 1]`` of earlier iterates: iterate ``k`` of depth ``t`` enters
         with ``w ** (t - k)``; 0 (default) uses only the final iterate.

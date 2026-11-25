@@ -106,7 +106,7 @@ def test_weighted_iterates_change_the_loss(problem):
 
 def test_supervised_loss_requires_targets(problem):
     A, y, _ = problem
-    with pytest.raises(ValueError, match='requires q_train and q_val'):
+    with pytest.raises(ValueError, match='requires source-strength targets'):
         train_model(make_config(A), y_train=y, y_val=y[:4])
 
 

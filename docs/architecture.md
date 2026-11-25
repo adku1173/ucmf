@@ -72,14 +72,22 @@ with CV. Compilation takes about 1 min; the inductor cache reuses graphs across 
 ## Training
 
 ```text
-train_model: normalize_operator → prepare_data (equireg) → build_loss, build_solve
-  per step: objective(solve, y, q, t, D, u) → solve(y, D, t) = iterates (t, B, n) → weighted_mean
+train_model: normalize_operator → prepare_data (train, val; equireg) → build_loss, build_solve
+  per step: (samples, problems) = next(iterate_batches) → batch_operator(D, u, problems)
+            objective(solve, y, q, t, D_b, u_b) → solve(y, D_b, t) = iterates (t, B, n) → weighted_mean
+  validation: mean objective over validation_batches (fixed permutation, drop_last)
 ```
 
 - One function per objective in `OBJECTIVES` (`nmse`, `lasso`, `bic`, `cv`); `build_loss`
   binds `loss_kwargs`, `w`, and the CV generator ([0010](adr/0010-training-objectives.md)).
 - `build_solve` uses `compile_unrolled(model, stages)[:t]` (`compile=True`) or `all_iterates`.
 - CV splits `rows`, `complex_rows`, `mics`, `mics_cross` return `(op_t, train_rows, val_rows)`.
+- Dictionary bank ([0011](adr/0011-dictionary-banks.md)): a per-problem operator of `K`
+  entries plus `index_train`/`index_val`; `select_problems` picks a batch's entries.
+  `batch_sampling='random'` mixes entries (one dictionary per sample), `'per_dictionary'`
+  uses one entry per batch (shared operator).
+- `HermitianVectorization` is a plain object: module buffers would be static CUDA-graph
+  inputs, re-recorded for every newly derived CMF operator.
 
 ## Tests
 

@@ -159,6 +159,18 @@ config = TrainingConfig(
 result = train_model(config, y_train=y_train, y_val=y_val)  # q_train/q_val for 'nmse'
 ```
 
+For data with one dictionary per frequency bin, pass a bank (`H` of shape `(K, c, n)`) and
+the bank entry of every sample (`index_train`, `index_val`). `batch_sampling='random'`
+mixes dictionaries within a batch, `'per_dictionary'` draws each batch from one dictionary.
+The sample distribution over the bank (e.g. log-uniform in frequency) comes from the data.
+See [ADR 0011](docs/adr/0011-dictionary-banks.md).
+
+```python
+config = TrainingConfig(..., operator_name='CMFPropagation', operator_kwargs={'H': H_bank})
+result = train_model(config, y_train=y_train, y_val=y_val, q_train=q_train, q_val=q_val,
+                     index_train=index_train, index_val=index_val)
+```
+
 Objectives: `nmse` (supervised), `lasso` (`lam`), `bic` (`alpha=1e-2`), and `cv`
 (`split` in `rows`, `complex_rows`, `mics`, `mics_cross`; `train_ratio=0.8`). With
 `w > 0`, earlier iterates enter with normalized weights `w^(t-k)`. See

@@ -38,8 +38,21 @@ def iterate_batches(config, num_samples, index=None):
     share one shape (one compiled graph). ``index`` assigns each sample its entry of a
     dictionary bank; ``problems`` selects the entries of a batch (see :func:`batch_operator`):
     None without a bank, ``index[samples]`` for 'random' sampling, and for 'per_dictionary'
-    the single 0-dim entry shared by all samples of the batch.
+    the single 0-dim entry shared by all samples of the batch. 'per_dictionary' drops the
+    incomplete batch of every entry, which favors frequent entries in small datasets.
+
+    Raises
+    ------
+    ValueError
+        If 'per_dictionary' sampling has no bank or no entry with a full batch.
     """
+    if config.batch_sampling == 'per_dictionary':
+        if index is None or torch.bincount(index).max() < config.batch_size:
+            raise ValueError("batch_sampling='per_dictionary' needs a bank entry with at least batch_size samples.")
+    return _batches(config, num_samples, index)
+
+
+def _batches(config, num_samples, index):
     generator = torch.Generator(device=config.torch_device).manual_seed(config.seed)
     B, device = config.batch_size, config.torch_device
     while True:
@@ -53,6 +66,26 @@ def iterate_batches(config, num_samples, index=None):
         batches = [chunk for group in grouped.split(counts) for chunk in group.split(B) if len(chunk) == B]
         for i in torch.randperm(len(batches), generator=generator, device=device).tolist():
             yield batches[i], index[batches[i][0]]
+
+
+def validation_batches(config, y, q, index):
+    """Split a validation set into fixed batches ``(y, q, problems)`` of ``config.batch_size``.
+
+    A permutation seeded by ``config.seed`` precedes the split, so the dropped incomplete
+    batch holds random samples, not the end of ordered data (e.g. the highest frequencies).
+    ``problems`` selects one bank entry per sample, or is None without a bank.
+    """
+    generator = torch.Generator(device=config.torch_device).manual_seed(config.seed)
+    B, num_samples = config.batch_size, y.shape[0]
+    permutation = torch.randperm(num_samples, generator=generator, device=config.torch_device)
+    # Keep a multiple of B (drop_last) and split it into rows of B sample indices.
+    blocks = permutation[: num_samples // B * B].view(-1, B)
+    batches = []
+    for samples in blocks:
+        q_batch = None if q is None else q[samples]  # targets only for supervised losses
+        problems = None if index is None else index[samples]  # bank entries only with a bank
+        batches.append((y[samples], q_batch, problems))
+    return batches
 
 
 def batch_operator(operator, column_norms, problems):
@@ -90,60 +123,68 @@ def build_solve(config, model):
     return lambda y, operator, t: all_iterates(model, y, t, operator=operator)
 
 
-def evaluate(objective, solve, y, q, operator, column_norms, stage):
-    """No-grad ``objective`` at solver depth ``stage`` on ``(y, q)``."""
+def evaluate(objective, solve, batches, operator, column_norms, stage):
+    """No-grad mean ``objective`` at solver depth ``stage`` over the :func:`validation_batches`."""
     with torch.no_grad():
-        return objective(solve, y, q, stage, operator, column_norms).item()
+        losses = [
+            objective(solve, y, q, stage, *batch_operator(operator, column_norms, problems))
+            for y, q, problems in batches
+        ]
+        return torch.stack(losses).mean().item()
 
 
-def prepare_data(config, operator, y_train, y_val, q_train, q_val, index_train=None, index_val=None):
-    """Validate the training data, move it to the config's device and precision, and scale it.
+def prepare_data(config, operator, y, q=None, index=None):
+    """Move one dataset to the config's device and precision, validate it, and scale it.
 
     With ``config.data_scaling == 'equireg'``, measurements and targets of every sample
     are divided by ``lambda_max`` of the normalized ``operator``. For a dictionary bank
-    (a per-problem ``operator``), ``index_train`` ``(N,)`` and ``index_val`` ``(M,)``
-    give the bank entry of every sample; integer values in ``[0, K)`` are a precondition.
+    (a per-problem ``operator`` of ``K`` entries), ``index`` ``(N,)`` gives the bank entry
+    of every sample; integer values in ``[0, K)`` are a precondition.
 
     Returns
     -------
     tuple
-        ``(y_train, y_val, q_train, q_val, index_train, index_val)``; missing ones stay None.
+        ``(y, q, index)``; missing ones stay None.
 
     Raises
     ------
     ValueError
-        If ``y_train``/``y_val`` are not 2D or have fewer samples than one batch, a supervised
-        loss misses targets, the operator does not match the configured dtype and device,
-        the indices do not match a bank, or 'per_dictionary' sampling has no full batch.
+        See :func:`_validate_data`.
     """
-    if y_train.ndim != 2 or y_val.ndim != 2:
-        raise ValueError(f'y_train and y_val must be 2D, got {tuple(y_train.shape)} and {tuple(y_val.shape)}.')
-    for name, y in (('y_train', y_train), ('y_val', y_val)):
-        if y.shape[0] < config.batch_size:
-            raise ValueError(f'{name} has {y.shape[0]} samples, fewer than batch_size={config.batch_size}.')
-    if (index_train is None) != (index_val is None) or (index_train is None) != (operator.batch_size is None):
-        raise ValueError('index_train and index_val are required exactly for a dictionary bank (per-problem operator).')
-    if index_train is not None and (index_train.shape != y_train.shape[:1] or index_val.shape != y_val.shape[:1]):
-        raise ValueError('index_train and index_val must hold one bank entry per sample.')
-    if config.batch_sampling == 'per_dictionary' and (
-        index_train is None or torch.bincount(index_train).max() < config.batch_size
-    ):
-        raise ValueError("batch_sampling='per_dictionary' needs a bank entry with at least batch_size samples.")
-    if config.supervised and (q_train is None or q_val is None):
-        raise ValueError(f'loss {config.loss!r} requires q_train and q_val.')
-    y_train, y_val, q_train, q_val = (
-        None if tensor is None else tensor.to(dtype=config.torch_dtype, device=config.torch_device)
-        for tensor in (y_train, y_val, q_train, q_val)
-    )
-    index_train, index_val = (None if i is None else i.to(config.torch_device) for i in (index_train, index_val))
-    if operator.dtype != y_train.dtype:
-        raise ValueError(f'operator must have dtype {y_train.dtype}, got {operator.dtype}.')
-    if operator.device != y_train.device:
-        raise ValueError(f'operator must be on device {y_train.device}, got {operator.device}.')
+    y, q = (None if t is None else t.to(dtype=config.torch_dtype, device=config.torch_device) for t in (y, q))
+    index = None if index is None else index.to(config.torch_device)
+    _validate_data(config, operator, y, q, index)
     if config.data_scaling == 'equireg':
-        y_train, q_train = _equiregularize(operator, y_train, q_train, index_train)
-        y_val, q_val = _equiregularize(operator, y_val, q_val, index_val)
-    return y_train, y_val, q_train, q_val, index_train, index_val
+        y, q = _equiregularize(operator, y, q, index)
+    return y, q, index
+
+
+def _validate_data(config, operator, y, q, index):
+    """Check one moved dataset against the config and the operator.
+
+    Raises
+    ------
+    ValueError
+        If ``y`` is not 2D or has fewer samples than one batch, a supervised loss misses
+        targets, the operator does not match the configured dtype and device, or ``index``
+        is not given exactly for a bank with one entry per sample.
+    """
+    if y.ndim != 2:
+        raise ValueError(f'y must be 2D, got shape {tuple(y.shape)}.')
+    if y.shape[0] < config.batch_size:
+        raise ValueError(f'y has {y.shape[0]} samples, fewer than batch_size={config.batch_size}.')
+    if config.supervised and q is None:
+        raise ValueError(f'loss {config.loss!r} requires source-strength targets q.')
+
+    if operator.dtype != y.dtype:
+        raise ValueError(f'operator must have dtype {y.dtype}, got {operator.dtype}.')
+    if operator.device != y.device:
+        raise ValueError(f'operator must be on device {y.device}, got {operator.device}.')
+
+    if (index is not None) != (operator.batch_size is not None):
+        raise ValueError('index is required exactly for a dictionary bank (per-problem operator).')
+    if index is not None and index.shape != y.shape[:1]:
+        raise ValueError(f'index must hold one bank entry per sample, got shape {tuple(index.shape)}.')
 
 
 def _equiregularize(operator, y, q, index):

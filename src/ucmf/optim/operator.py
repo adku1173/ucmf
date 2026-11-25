@@ -333,6 +333,20 @@ class HermitianVectorization:
         diagonal = (self.real_i == self.real_j).to(device=reference.device)
         return torch.where(diagonal, reference.new_tensor(1.0), reference.new_tensor(math.sqrt(2.0)))
 
+    def diagonal_rows(self):
+        """Return the mask of the rows that hold CSM diagonal entries.
+
+        Without ``r_diag``, ``hvec_r(S) = hvec(S)[~diagonal_rows()]`` gives the vectorization
+        with ``r_diag=True``; with ``r_diag``, the mask is all False.
+
+        Returns
+        -------
+        Tensor
+            Boolean mask of shape ``(m,)`` on the device of the index tensors.
+        """
+        imag = torch.zeros(self.num_measurements - self.num_real, dtype=torch.bool, device=self.real_i.device)
+        return torch.cat((self.real_i == self.real_j, imag))
+
     def row_weights(self, reference):
         """Return the weights ``w`` relating Acoular's unweighted vector to ``hvec = w * vec``.
 

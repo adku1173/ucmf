@@ -316,6 +316,13 @@ def test_dimensions(r_diag):
     assert HermitianVectorization(C, r_diag=r_diag).num_measurements == (C * (C - 1) if r_diag else C * C)
 
 
+def test_diagonal_rows_select_the_r_diag_vectorization():
+    real, imag = random_hermitian(3)
+    full, reduced = HermitianVectorization(C), HermitianVectorization(C, r_diag=True)
+    torch.testing.assert_close(reduced(real, imag), full(real, imag)[..., ~full.diagonal_rows()])
+    assert full.diagonal_rows().sum() == C and not reduced.diagonal_rows().any()
+
+
 @pytest.mark.parametrize('r_diag', [False, True])
 def test_isometry_and_inverse_on_its_domain(r_diag):
     hvec = HermitianVectorization(C, r_diag=r_diag)
