@@ -4,8 +4,10 @@ import pytest
 
 pytest.importorskip('ray')
 
-from ucmf.train import TrainingConfig, TrainingResult, train_model  # noqa: E402
+from ucmf.train import TrainingResult, train_model  # noqa: E402
 from ucmf.train.utils import iterate_batches  # noqa: E402
+
+from configs import training_config  # noqa: E402
 
 import torch  # noqa: E402
 
@@ -23,21 +25,10 @@ def problem():
 
 
 def make_config(A, **overrides):
-    config = {
-        'model_name': 'AdaLFISTASW',
-        'operator_name': 'MatrixMult',
-        'model_kwargs': MODEL_KWARGS,
-        'operator_kwargs': {'matrix': A},
-        'stages': STAGES,
-        'steps_per_stage': STEPS,
-        'batch_size': 4,
-        'learning_rate': 1e-2,
-        'loss': 'nmse',
-        'device': 'cpu',
-        'precision': 'float64',
-        'compile': False,  # eager for speed; test_compiled_training_matches_eager covers compile
-    }
-    return TrainingConfig(**{**config, **overrides})
+    settings = {'operator_name': 'MatrixMult', 'operator_kwargs': {'matrix': A}, 'model_kwargs': MODEL_KWARGS}
+    return training_config(
+        **{**settings, 'stages': STAGES, 'steps_per_stage': STEPS, 'learning_rate': 1e-2, **overrides}
+    )
 
 
 def run(problem, **overrides):

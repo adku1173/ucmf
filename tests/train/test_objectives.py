@@ -11,8 +11,10 @@ import math  # noqa: E402
 from ucmf import AdaLFISTASW  # noqa: E402
 from ucmf.optim.compile import all_iterates  # noqa: E402
 from ucmf.optim.operator import MatrixMult  # noqa: E402
-from ucmf.train import TrainingConfig, train_model  # noqa: E402
+from ucmf.train import train_model  # noqa: E402
 from ucmf.train.objectives import bic, build_loss, lasso, nmse, weighted_mean  # noqa: E402
+
+from configs import training_config  # noqa: E402
 
 import torch  # noqa: E402
 
@@ -60,20 +62,8 @@ def test_lasso_matches_dense_reference():
 def make_config(loss, **loss_kwargs):
     matrix = torch.randn(M, N_DIM, dtype=torch.float64, generator=torch.Generator().manual_seed(2))
     model_kwargs = {'num_iterations': 2, 'gamma_init': 0.3, 'theta_init': 0.01, 'num_measurements': M}
-    return TrainingConfig(
-        model_name='AdaLFISTASW',
-        operator_name='MatrixMult',
-        model_kwargs=model_kwargs,
-        operator_kwargs={'matrix': matrix},
-        loss=loss,
-        loss_kwargs=loss_kwargs,
-        stages=2,
-        steps_per_stage=2,
-        batch_size=BATCH,
-        device='cpu',
-        precision='float64',
-        compile=False,
-    )
+    operator = {'operator_name': 'MatrixMult', 'operator_kwargs': {'matrix': matrix}}
+    return training_config(**operator, model_kwargs=model_kwargs, loss=loss, loss_kwargs=loss_kwargs, batch_size=BATCH)
 
 
 def test_bic_matches_formula_with_constant_eps():

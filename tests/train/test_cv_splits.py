@@ -5,8 +5,10 @@ import pytest
 pytest.importorskip('ray')
 
 from ucmf.optim.operator import CMFDictionary, CMFPropagation, MatrixMult  # noqa: E402
-from ucmf.train import TrainingConfig, train_model  # noqa: E402
+from ucmf.train import train_model  # noqa: E402
 from ucmf.train.objectives import cv_loss, split_complex_rows, split_mics, split_mics_cross, split_rows  # noqa: E402
+
+from configs import training_config  # noqa: E402
 
 import torch  # noqa: E402
 
@@ -109,19 +111,8 @@ CV_MODEL = {'num_iterations': 2, 'gamma_init': 0.3, 'theta_init': 0.01, 'num_mea
 
 def cv_config(**overrides):
     H = torch.randn(C, 4, dtype=torch.complex128, generator=torch.Generator().manual_seed(7))
-    settings = {'model_kwargs': CV_MODEL, 'operator_kwargs': {'H': H}, **overrides}
-    return TrainingConfig(
-        model_name='AdaLFISTASW',
-        operator_name='CMFDictionary',
-        loss='cv',
-        stages=2,
-        steps_per_stage=2,
-        batch_size=B,
-        device='cpu',
-        precision='float64',
-        compile=False,
-        **settings,
-    )
+    settings = {'operator_name': 'CMFDictionary', 'operator_kwargs': {'H': H}, 'model_kwargs': CV_MODEL}
+    return training_config(**{**settings, 'loss': 'cv', 'batch_size': B, **overrides})
 
 
 @pytest.mark.parametrize('split', ['rows', 'complex_rows', 'mics', 'mics_cross'])

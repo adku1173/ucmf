@@ -31,7 +31,6 @@ class _ReducedSingleWeight(FISTA):
             raise ValueError(f'num_mics must exceed {int(r_diag)} for r_diag={r_diag}, got {num_mics}.')
         self.num_mics = num_mics
         self.r_diag = r_diag
-        self.num_measurements = num_mics * (num_mics - int(r_diag))
         self.Br_re = nn.Parameter(torch.eye(num_mics))
         self.Br_im = nn.Parameter(torch.zeros(num_mics, num_mics))
 

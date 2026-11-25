@@ -61,7 +61,7 @@ def split_mics(operator, y, train_ratio, generator):
     """
     train_mics, val_mics = _partition_mics(operator, y, train_ratio, generator)
     op_t = operator.select_mics(train_mics)
-    return op_t, op_t.rows, operator.select_mics(val_mics).rows
+    return op_t, op_t.rows, operator.mic_rows(val_mics)
 
 
 def split_mics_cross(operator, y, train_ratio, generator):

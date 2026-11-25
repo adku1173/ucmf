@@ -544,23 +544,9 @@ class CMFPropagation(LinearOperator):
         op.rows = self._subset_rows(torch.cat((real_rows, imag_rows), dim=-1))
         return op
 
-    def transformed(self, Br):
-        """Build the operator of the transformed propagation matrix ``Br @ H``.
-
-        With ``r_diag=True``, the diagonal is discarded *after* the transformation.
-        This is not a congruence of the zero-diagonal CSM.
-
-        Parameters
-        ----------
-        Br : Tensor
-            Complex ``(c, c)`` or ``(B, c, c)`` matrix in the current microphone coordinates.
-
-        Returns
-        -------
-        CMFPropagation
-            Operator of ``Br @ H`` with unchanged ``rows`` and ``mics``.
-        """
-        return self._with_propagation(Br @ self.H)
+    def mic_rows(self, index):
+        """Return ``select_mics(index).rows``, the original rows of a microphone block."""
+        return self.select_mics(index).rows
 
 
 class CMFDictionary(MatrixMult):
@@ -653,17 +639,9 @@ class CMFDictionary(MatrixMult):
         """
         return self._derived(self._propagation.select_mics(index))
 
-    def transformed(self, Br):
-        """Build the dictionary of ``Br @ H``, see :meth:`CMFPropagation.transformed`.
+    def mic_rows(self, index):
+        """Return the rows of a microphone block without building its dictionary.
 
-        Parameters
-        ----------
-        Br : Tensor
-            Complex ``(c, c)`` or ``(B, c, c)`` matrix in the current microphone coordinates.
-
-        Returns
-        -------
-        CMFDictionary
-            Dictionary of ``Br @ H``.
+        See :meth:`CMFPropagation.mic_rows`.
         """
-        return self._derived(self._propagation.transformed(Br))
+        return self._propagation.mic_rows(index)

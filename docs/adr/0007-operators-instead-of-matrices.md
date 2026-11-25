@@ -45,7 +45,7 @@ many microphones, and for per-sample microphone CV.
 3. `MatrixMult(A)`: dense matrix, exposes `matrix`; `select_rows(I)`.
 4. CMF operators share `H`, `hvec`, `r_diag` and two derived operators:
    `select_mics(M1)` (shared `(c1,)` or per problem `(B, c1)`) and
-   `transformed(Br)` (`G = Br H`). Representations: `CMFDictionary` (builds the
+   `transformed(Br)` (`G = Br H`; later removed as unused). Representations: `CMFDictionary` (builds the
    dense dictionary, also a `MatrixMult`) and `CMFPropagation` (H only).
    All live in `operator.py` next to `HermitianVectorization`.
 5. Subsets belong to the operator; the forward argument `msm_subset` is

@@ -18,8 +18,9 @@ runtime dependency; ucmf needs only PyTorch and NumPy. Tests do not import `fa20
 | `ADA[-CMF]-NA-ALFISTA`, `ADA[-CMF]-NA-LFISTA` (`na_alista.py`) | `NA_AdaLFISTA*` ([0008](adr/0008-neural-augmentation-mixins.md)) |
 
 Not migrated: TLS, `NA_ALISTA`, `NormLSTMB`/`NormLSTMC`, `LinearTransform`, NA with
-`theta = lam * gamma`, `SFISTA`/`ALFISTA` without Ada weight, `L-` variants, training,
-checkpoints, acoustic callbacks, and physical models.
+`theta = lam * gamma`, `SFISTA`/`ALFISTA` without Ada weight, `L-` variants, checkpoints,
+acoustic callbacks, and physical models. Training is reimplemented in `ucmf.train`
+([0010](adr/0010-training-objectives.md)).
 
 ## Behavior
 

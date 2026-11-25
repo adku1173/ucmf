@@ -28,7 +28,7 @@ scaling (`lambda_max`, per measurement) would still live elsewhere.
 2. CMF operators work matrix-free: `||hvec(h_j h_j^H)||_2 = ||h_j||_2^2`
    (`hvec` is an isometry), with `r_diag` `sqrt(||h_j||^4 - sum_i |h_ij|^4)`;
    `scale_columns` scales `H` by `sqrt(scale)`.
-3. Column scaling commutes with `select_rows`, `select_mics`, and `transformed`.
+3. Column scaling commutes with `select_rows` and `select_mics`.
    CV computes `U_t` on the training subset, scales the full operator, and then
    selects the subsets.
 4. `ucmf.scaling` (functions, not exported from `ucmf`) holds the problem layer:
@@ -36,7 +36,8 @@ scaling (`lambda_max`, per measurement) would still live elsewhere.
 5. Solvers only see `D` and return `x`. Ada models require unit column norms as a
    documented, unchecked precondition; ISTA/FISTA stay general.
 6. Training always normalizes the configured operator; `mse`/`nmse` compare
-   `to_source(x_hat, u)` with the targets `q_train`/`q_val`.
+   `to_source(x_hat, u)` with the targets `q_train`/`q_val`. (Objectives superseded by
+   [0010](0010-training-objectives.md): only `nmse` remains supervised.)
 7. Equiregularization: `lambda_max(D, y) = max_j d_j^T y / m` (nonnegative LASSO,
    `(B,)`); callers divide `y` and `q` per problem by it, so `lam` in `[0, 1]` is relative
    to `lambda_max = 1`. Physical source strengths are `lambda_max * to_source(x, u)`.

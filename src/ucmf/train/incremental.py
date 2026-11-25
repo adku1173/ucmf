@@ -49,7 +49,7 @@ def train_model(config, *, y_train, y_val, q_train=None, q_val=None):
         Validation measurements of shape ``(M, m)`` for per-stage checkpoint selection.
     q_train, q_val : Tensor, optional
         Source strengths ``q`` of shape ``(N, n)`` / ``(M, n)`` for the unnormalized
-        operator; required for 'mse' and 'nmse'.
+        operator; required for 'nmse'.
 
     Returns
     -------
