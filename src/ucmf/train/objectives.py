@@ -4,10 +4,11 @@
 compiled. Each objective returns the loss; :func:`weighted_mean` explains ``w``.
 """
 
+import inspect
 import math
 from functools import partial
 
-from ..scaling import to_source
+from ..scaling import lambda_max, normalize_operator, to_source
 
 import torch
 
@@ -45,6 +46,31 @@ def split_complex_rows(operator, y, train_ratio, generator):
     train = torch.cat((diagonal_t, off_t, imag_rows[off_t]), dim=-1).sort(dim=-1).values
     val = torch.cat((diagonal_v, off_v, imag_rows[off_v]), dim=-1).sort(dim=-1).values
     return operator.select_rows(train), train, val
+
+
+def _partition_mics(operator, y, train_ratio, generator):
+    """Split the microphones of a CMF operator per problem into train and val microphones."""
+    return _partition(torch.arange(operator.hvec.num_mics, device=y.device), y.shape[0], train_ratio, generator)
+
+
+def split_mics(operator, y, train_ratio, generator):
+    """CV split of the microphones per problem into the CSM blocks of disjoint microphone sets.
+
+    The cross terms between both sets stay unused; ``train_ratio`` refers to microphones.
+    Requires a CMF operator over all rows, so that its ``rows`` index ``y``; see :func:`split_rows`.
+    """
+    train_mics, val_mics = _partition_mics(operator, y, train_ratio, generator)
+    op_t = operator.select_mics(train_mics)
+    return op_t, op_t.rows, operator.select_mics(val_mics).rows
+
+
+def split_mics_cross(operator, y, train_ratio, generator):
+    """Like :func:`split_mics`, but validate on all other rows: val block and cross terms."""
+    train_mics, _ = _partition_mics(operator, y, train_ratio, generator)
+    op_t = operator.select_mics(train_mics)
+    outside = torch.ones_like(y, dtype=torch.bool).scatter(-1, op_t.rows, False)
+    val = torch.arange(y.shape[-1], device=y.device).expand_as(y)[outside].view(y.shape[0], -1)
+    return op_t, op_t.rows, val
 
 
 def weighted_mean(outputs, criterion, w):
@@ -101,9 +127,37 @@ def bic_loss(solve, y, q, t, operator, column_norms, *, w, alpha=1e-2):
     return weighted_mean(solve(y, operator, t), lambda x_hat: bic(x_hat, y, operator, alpha), w)
 
 
-OBJECTIVES = {'nmse': nmse_loss, 'lasso': lasso_loss, 'bic': bic_loss}
+SPLITS = {'rows': split_rows, 'complex_rows': split_complex_rows, 'mics': split_mics, 'mics_cross': split_mics_cross}
+
+
+def cv_loss(solve, y, q, t, operator, column_norms, *, w, generator, split='rows', train_ratio=0.8):
+    """Weighted CV residual ``||D_v x - y_v||^2 / (2 m_v)`` of iterates solved on the train rows.
+
+    Column norms and ``lambda_max`` of the train subset also scale the val rows (ADR 0009);
+    ``D_v x`` is the full forward of ``x / u_t``, so no val operator is formed.
+    """
+    op_t, train, val = SPLITS[split](operator, y, train_ratio, generator)
+    D_t, u_t = normalize_operator(op_t)
+    lam = lambda_max(D_t, y.gather(-1, train)).unsqueeze(-1)
+    y_t, y_v = y.gather(-1, train) / lam, y.gather(-1, val) / lam
+
+    def residual(x_hat):
+        error = operator.forward(x_hat / u_t).gather(-1, val) - y_v
+        return (torch.linalg.vector_norm(error, dim=-1).square() / (2 * val.shape[-1])).mean()
+
+    return weighted_mean(solve(y_t, D_t, t), residual, w)
+
+
+OBJECTIVES = {'nmse': nmse_loss, 'lasso': lasso_loss, 'bic': bic_loss, 'cv': cv_loss}
+SUPPLIED = {  # keywords bound by build_loss from the config, not by loss_kwargs
+    'w': lambda config: config.w,
+    'generator': lambda config: torch.Generator(config.torch_device).manual_seed(config.seed),
+}
 
 
 def build_loss(config):
-    """Bind the objective ``config.loss`` to ``config.w`` and ``config.loss_kwargs``."""
-    return partial(OBJECTIVES[config.loss], w=config.w, **config.loss_kwargs)
+    """Bind ``config.loss`` to ``config.loss_kwargs`` and the :data:`SUPPLIED` keywords it takes."""
+    objective = OBJECTIVES[config.loss]
+    parameters = inspect.signature(objective).parameters
+    supplied = {name: make(config) for name, make in SUPPLIED.items() if name in parameters}
+    return partial(objective, **supplied, **config.loss_kwargs)

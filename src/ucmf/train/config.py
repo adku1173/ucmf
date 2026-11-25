@@ -3,7 +3,7 @@
 import inspect
 from dataclasses import dataclass, field
 
-from .objectives import OBJECTIVES
+from .objectives import OBJECTIVES, SPLITS, SUPPLIED
 
 import torch
 
@@ -100,8 +100,9 @@ class TrainingConfig:
         if self.loss not in LOSSES:
             raise ValueError(f'loss must be one of {LOSSES}, got {self.loss!r}.')
         parameters = inspect.signature(OBJECTIVES[self.loss]).parameters.values()
-        keywords = {p.name for p in parameters if p.kind is p.KEYWORD_ONLY} - {'w'}
-        required = {p.name for p in parameters if p.kind is p.KEYWORD_ONLY and p.default is p.empty} - {'w'}
+        keywords = {p.name for p in parameters if p.kind is p.KEYWORD_ONLY} - set(SUPPLIED)
+        required = {p.name for p in parameters if p.kind is p.KEYWORD_ONLY and p.default is p.empty}
+        required -= set(SUPPLIED)
         if not required <= set(self.loss_kwargs) <= keywords:
             raise ValueError(
                 f'loss {self.loss!r} needs loss_kwargs {sorted(required)}, got {sorted(self.loss_kwargs)}.'
@@ -110,8 +111,12 @@ class TrainingConfig:
             raise ValueError(f'w must lie in [0, 1], got {self.w}.')
         if self.data_scaling not in DATA_SCALINGS:
             raise ValueError(f'data_scaling must be one of {DATA_SCALINGS}, got {self.data_scaling!r}.')
+        if self.loss == 'cv' and self.loss_kwargs.get('split', 'rows') not in SPLITS:  # 'rows': cv_loss default
+            raise ValueError(f'split must be one of {tuple(SPLITS)}, got {self.loss_kwargs["split"]!r}.')
         if self.data_scaling == 'equireg' and self.model_kwargs.get('nonnegative', True) is False:
             raise ValueError("data_scaling='equireg' requires a nonnegative model.")
+        if self.loss == 'cv' and self.model_kwargs.get('nonnegative', True) is False:
+            raise ValueError("loss='cv' requires a nonnegative model (lambda_max).")
         for name in ('stages', 'steps_per_stage', 'batch_size', 'val_every'):
             if getattr(self, name) < 1:
                 raise ValueError(f'{name} must be positive, got {getattr(self, name)}.')
