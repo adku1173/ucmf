@@ -1,4 +1,4 @@
-# 0009: Column normalization outside the solvers
+# 0009: Column normalization and equiregularization outside the solvers
 
 Status: Accepted — requested by the author; implemented.
 
@@ -37,10 +37,21 @@ scaling (`lambda_max`, per measurement) would still live elsewhere.
    documented, unchecked precondition; ISTA/FISTA stay general.
 6. Training always normalizes the configured operator; `mse`/`nmse` compare
    `to_source(x_hat, u)` with the targets `q_train`/`q_val`.
+7. Equiregularization: `lambda_max(D, y) = max_j d_j^T y / m` (nonnegative LASSO,
+   `(B,)`); callers divide `y` and `q` per problem by it, so `lam` in `[0, 1]` is relative
+   to `lambda_max = 1`. Physical source strengths are `lambda_max * to_source(x, u)`.
+   `lambda_max > 0` is an unchecked precondition; there is no clamp.
+8. Training preprocesses the data once with the full `D` when
+   `data_scaling='equireg'` (default; `'none'` keeps the data). It requires a
+   nonnegative model. The losses never undo `lambda_max`: the NMSE cancels it, the MSE
+   compares the scaled targets as in FA2026.
+9. Both scalings compose: CV renormalizes the preprocessed data per subset with
+   `normalize_operator(D_t)` and `lambda_max(D_t, y_t)` and applies them to the validation
+   subset, which reproduces `A_s U_t^-1` and `y_s / lambda_t` exactly.
 
 ## Consequences
 
 - Users of trained models call `normalize_operator` and `to_source` themselves.
 - The NMSE on `q` is invariant to a global scale of `A`, not to per-column scaling.
 - Acoular keeps its own `dictionary_scaling`; the capabilities are ucmf-only for now.
-- Open: data scaling by `lambda_max` (equiregularization) extends `ucmf.scaling`.
+- FA2026 clamps `lambda_max` and the column norms; ucmf relies on the preconditions instead.

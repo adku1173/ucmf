@@ -132,6 +132,12 @@ x = model(y, operator=D, t=10)
 q = to_source(x, u)  # source strengths of the original operator
 ```
 
+Equiregularization divides each measurement by `lam_max = lambda_max(D, y)` (from
+`ucmf.scaling`, nonnegative LASSO) before solving, so that `lam = 1` gives the zero
+solution for every problem; physical source strengths are then
+`lam_max.unsqueeze(-1) * to_source(x, u)`. Training applies it by default
+(`data_scaling='equireg'`).
+
 For subsets, use `D.select_rows(...)` or `select_mics(...)` and align `y` with
 `D.rows`; the column norms of the full operator stay valid for `to_source`. `compile_unrolled(model, t_max)` compiles once for all depths. See the
 [architecture guide](docs/architecture.md).

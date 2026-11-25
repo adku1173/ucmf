@@ -5,7 +5,7 @@ import warnings
 import ucmf
 
 from ..optim import operator as operator_module
-from ..scaling import to_source
+from ..scaling import lambda_max, to_source
 
 import ray.tune
 import torch
@@ -84,8 +84,11 @@ def evaluate(config, model, y, q, operator, column_norms, stage):
         return batch_loss(config, x_hat, y, q, operator, column_norms).item()
 
 
-def prepare_data(config, y_train, y_val, q_train, q_val):
-    """Validate the training data and move it to the config's device and precision.
+def prepare_data(config, operator, y_train, y_val, q_train, q_val):
+    """Validate the training data, move it to the config's device and precision, and scale it.
+
+    With ``config.data_scaling == 'equireg'``, measurements and targets of every sample
+    are divided by ``lambda_max`` of the normalized ``operator``.
 
     Returns
     -------
@@ -95,13 +98,28 @@ def prepare_data(config, y_train, y_val, q_train, q_val):
     Raises
     ------
     ValueError
-        If ``y_train``/``y_val`` are not 2D, or a supervised loss misses targets.
+        If ``y_train``/``y_val`` are not 2D, a supervised loss misses targets, or the
+        operator does not match the configured dtype and device.
     """
     if y_train.ndim != 2 or y_val.ndim != 2:
         raise ValueError(f'y_train and y_val must be 2D, got {tuple(y_train.shape)} and {tuple(y_val.shape)}.')
     if config.supervised and (q_train is None or q_val is None):
         raise ValueError(f'loss {config.loss!r} requires q_train and q_val.')
-    return tuple(
+    y_train, y_val, q_train, q_val = (
         None if tensor is None else tensor.to(dtype=config.torch_dtype, device=config.torch_device)
         for tensor in (y_train, y_val, q_train, q_val)
     )
+    if operator.dtype != y_train.dtype:
+        raise ValueError(f'operator must have dtype {y_train.dtype}, got {operator.dtype}.')
+    if operator.device != y_train.device:
+        raise ValueError(f'operator must be on device {y_train.device}, got {operator.device}.')
+    if config.data_scaling == 'equireg':
+        y_train, q_train = _equiregularize(operator, y_train, q_train)
+        y_val, q_val = _equiregularize(operator, y_val, q_val)
+    return y_train, y_val, q_train, q_val
+
+
+def _equiregularize(operator, y, q):
+    """Divide measurements and optional targets per sample by ``lambda_max``."""
+    lam = lambda_max(operator, y).unsqueeze(-1)
+    return y / lam, None if q is None else q / lam

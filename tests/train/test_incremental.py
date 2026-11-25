@@ -87,6 +87,25 @@ def test_training_is_invariant_to_scaling_of_A(problem, loss, per_column):
         assert entry['train_loss'] == pytest.approx(expected['train_loss'])
 
 
+def test_equireg_is_invariant_to_per_sample_data_scaling(problem):
+    """The MSE itself is scale dependent; equiregularization removes the sample scales."""
+    A, y, q = problem
+    c = torch.rand(N_SAMPLES, 1, dtype=torch.float64) * 10 + 0.1
+    config = make_config(A, loss='mse')
+    scaled = train_model(config, y_train=c * y, y_val=c[:4] * y[:4], q_train=c * q, q_val=c[:4] * q[:4])
+    reference = run(problem, loss='mse')
+    for entry, expected in zip(scaled.history, reference.history, strict=True):
+        assert entry['train_loss'] == pytest.approx(expected['train_loss'])
+
+
+def test_equireg_requires_nonnegative_model(problem):
+    A, _, _ = problem
+    model_kwargs = {**MODEL_KWARGS, 'nonnegative': False}
+    with pytest.raises(ValueError, match='requires a nonnegative model'):
+        make_config(A, model_kwargs=model_kwargs)
+    make_config(A, model_kwargs=model_kwargs, data_scaling='none')
+
+
 def test_unsupervised_loss_needs_no_targets(problem):
     A, y, _ = problem
     result = train_model(make_config(A, loss='relative_residual'), y_train=y, y_val=y[:4])
@@ -106,6 +125,7 @@ def test_invalid_config_rejected(problem):
         ({'model_name': 'FISTA'}, 'model_name'),
         ({'operator_name': 'Nope'}, 'operator_name'),
         ({'loss': 'nope'}, 'loss'),
+        ({'data_scaling': 'nope'}, 'data_scaling'),
         ({'stages': 0}, 'stages'),
         ({'batch_size': 0}, 'batch_size'),
         ({'precision': 'float16'}, 'precision'),

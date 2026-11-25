@@ -51,11 +51,14 @@ Solvers work in normalized coordinates and never see the column norms
 
 ```text
 A → normalize_operator → (D = A U^-1, u) → solver(y, operator=D) → x → to_source(x, u) → q
+ȳ → y = ȳ / lambda_max(D, ȳ),  q = q̄ / lambda_max       q̄ = lambda_max · q
 ```
 
 - Operators provide `column_norms()` and `scale_columns(scale)`; `ucmf.scaling` composes them.
 - Ada models require unit column norms (unchecked precondition); ISTA/FISTA accept any operator.
-- Training normalizes the configured operator; supervised losses compare `q`.
+- Training normalizes the configured operator and, with `data_scaling='equireg'`, divides
+  `y` and `q` per sample by `lambda_max` once; supervised losses compare `q`.
+- CV recomputes both scalings on the training subset and applies them to the validation subset.
 
 ## Compilation
 

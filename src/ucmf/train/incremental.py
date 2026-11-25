@@ -31,7 +31,9 @@ def train_model(config, *, y_train, y_val, q_train=None, q_val=None):
     Stage ``t`` runs ``config.steps_per_stage`` Adam steps at solver depth ``t`` and
     restores the stage's best state by validation loss (as in FA2026). The model
     solves with the column-normalized operator ``D = A U^-1``; supervised losses map its
-    output back to source strengths, see :mod:`ucmf.scaling`. Every
+    output back to source strengths, see :mod:`ucmf.scaling`. With
+    ``config.data_scaling='equireg'``, measurements and targets are divided per sample
+    by ``lambda_max`` of the normalized operator. Every
     ``config.val_every`` steps and at the end of each stage, one metrics dict is
     reported to Ray and appended to the history.
 
@@ -53,8 +55,8 @@ def train_model(config, *, y_train, y_val, q_train=None, q_val=None):
     TrainingResult
         History, best validation loss of the last stage, and the trained state.
     """
-    y_train, y_val, q_train, q_val = prepare_data(config, y_train, y_val, q_train, q_val)
     operator, column_norms = normalize_operator(build_operator(config))
+    y_train, y_val, q_train, q_val = prepare_data(config, operator, y_train, y_val, q_train, q_val)
     model = build_model(config)
     if isinstance(model, NeuralAugmentation):
         model.init_normalizers(y_train[: config.batch_size], operator)

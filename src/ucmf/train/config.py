@@ -16,6 +16,7 @@ MODEL_NAMES = (
 )
 LOSSES = ('mse', 'nmse', 'relative_residual')
 SUPERVISED_LOSSES = ('mse', 'nmse')
+DATA_SCALINGS = ('none', 'equireg')
 OPERATOR_NAMES = ('MatrixMult', 'CMFDictionary', 'CMFPropagation')
 PRECISIONS = ('float32', 'float64', 'bfloat16')
 
@@ -44,6 +45,9 @@ class TrainingConfig:
         Adam learning rate; a fresh optimizer starts at every stage.
     loss : str
         'mse' or 'nmse' (supervised, need source targets) or 'relative_residual'.
+    data_scaling : str
+        'equireg' (default) divides measurements and targets per sample by
+        ``lambda_max`` of the normalized operator (nonnegative models only); 'none' keeps them.
     val_every : int
         Validation/reporting interval in steps within a stage.
     seed : int
@@ -65,6 +69,7 @@ class TrainingConfig:
     batch_size: int = 256
     learning_rate: float = 1e-3
     loss: str = 'mse'
+    data_scaling: str = 'equireg'
     val_every: int = 1
     seed: int = 0
     grad_clip_norm: float | None = None
@@ -79,6 +84,10 @@ class TrainingConfig:
             raise ValueError(f'operator_name must be one of {OPERATOR_NAMES}, got {self.operator_name!r}.')
         if self.loss not in LOSSES:
             raise ValueError(f'loss must be one of {LOSSES}, got {self.loss!r}.')
+        if self.data_scaling not in DATA_SCALINGS:
+            raise ValueError(f'data_scaling must be one of {DATA_SCALINGS}, got {self.data_scaling!r}.')
+        if self.data_scaling == 'equireg' and self.model_kwargs.get('nonnegative', True) is False:
+            raise ValueError("data_scaling='equireg' requires a nonnegative model.")
         for name in ('stages', 'steps_per_stage', 'batch_size', 'val_every'):
             if getattr(self, name) < 1:
                 raise ValueError(f'{name} must be positive, got {getattr(self, name)}.')
