@@ -105,5 +105,5 @@ class TrainingConfig:
 
     @property
     def supervised(self):
-        """Whether the loss needs source targets ``x_train``/``x_val``."""
+        """Whether the loss needs source-strength targets ``q_train``/``q_val``."""
         return self.loss in SUPERVISED_LOSSES

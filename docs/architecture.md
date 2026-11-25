@@ -44,6 +44,19 @@ Solvers and callbacks are not reentrant.
   `B v = hvec(Br hvec*(v) Br^H)`. Subsets restrict the weights via `operator.rows` / `operator.mics`.
 - `weight_mode='precomputed'` (SW, LFISTA) forms the dense product once per solve.
 
+## Scaling
+
+Solvers work in normalized coordinates and never see the column norms
+([0009](adr/0009-column-normalization.md)):
+
+```text
+A → normalize_operator → (D = A U^-1, u) → solver(y, operator=D) → x → to_source(x, u) → q
+```
+
+- Operators provide `column_norms()` and `scale_columns(scale)`; `ucmf.scaling` composes them.
+- Ada models require unit column norms (unchecked precondition); ISTA/FISTA accept any operator.
+- Training normalizes the configured operator; supervised losses compare `q`.
+
 ## Compilation
 
 `compile_unrolled(model, t_max)` compiles once and returns all iterates `(t_max, B, n)`;

@@ -5,23 +5,29 @@ import warnings
 import ucmf
 
 from ..optim import operator as operator_module
+from ..scaling import to_source
 
 import ray.tune
 import torch
 import torch.nn.functional as F
 
 
-def batch_loss(config, x_hat, y, x_true, operator):
-    """Batch-mean ``config.loss``: 'mse'/'nmse' vs. ``x_true``, 'relative_residual' vs. ``y``."""
+def batch_loss(config, x_hat, y, q_true, operator, column_norms):
+    """Batch-mean ``config.loss`` of the normalized solution ``x_hat`` for ``operator = A U^-1``.
+
+    'mse'/'nmse' compare the source strengths ``x_hat / column_norms`` with ``q_true``;
+    'relative_residual' compares ``operator.forward(x_hat)`` with ``y``.
+    """
     if config.loss == 'relative_residual':
         residual = operator.forward(x_hat) - y
         numerator = torch.linalg.vector_norm(residual, dim=1) ** 2
         denominator = torch.linalg.vector_norm(y, dim=1).clamp_min(1e-12) ** 2
         return (0.5 * numerator / denominator).mean()
+    q_hat = to_source(x_hat, column_norms)
     if config.loss == 'mse':
-        return F.mse_loss(x_hat, x_true)
-    numerator = torch.linalg.vector_norm(x_hat - x_true, dim=1) ** 2
-    denominator = torch.linalg.vector_norm(x_true, dim=1).clamp_min(1e-12) ** 2
+        return F.mse_loss(q_hat, q_true)
+    numerator = torch.linalg.vector_norm(q_hat - q_true, dim=1) ** 2
+    denominator = torch.linalg.vector_norm(q_true, dim=1).clamp_min(1e-12) ** 2
     return (numerator / denominator).mean()
 
 
@@ -71,20 +77,20 @@ def build_optimizer(config, model):
     return torch.optim.Adam(model.parameters(), lr=config.learning_rate)
 
 
-def evaluate(config, model, y, x, operator, stage):
-    """No-grad loss of the model at solver depth ``stage`` on ``(y, x)``."""
+def evaluate(config, model, y, q, operator, column_norms, stage):
+    """No-grad loss of the model at solver depth ``stage`` on ``(y, q)``."""
     with torch.no_grad():
         x_hat = model(y, t=stage, operator=operator)
-        return batch_loss(config, x_hat, y, x, operator).item()
+        return batch_loss(config, x_hat, y, q, operator, column_norms).item()
 
 
-def prepare_data(config, y_train, y_val, x_train, x_val):
+def prepare_data(config, y_train, y_val, q_train, q_val):
     """Validate the training data and move it to the config's device and precision.
 
     Returns
     -------
     tuple
-        ``(y_train, y_val, x_train, x_val)``; missing targets stay None.
+        ``(y_train, y_val, q_train, q_val)``; missing targets stay None.
 
     Raises
     ------
@@ -93,9 +99,9 @@ def prepare_data(config, y_train, y_val, x_train, x_val):
     """
     if y_train.ndim != 2 or y_val.ndim != 2:
         raise ValueError(f'y_train and y_val must be 2D, got {tuple(y_train.shape)} and {tuple(y_val.shape)}.')
-    if config.supervised and (x_train is None or x_val is None):
-        raise ValueError(f'loss {config.loss!r} requires x_train and x_val.')
+    if config.supervised and (q_train is None or q_val is None):
+        raise ValueError(f'loss {config.loss!r} requires q_train and q_val.')
     return tuple(
         None if tensor is None else tensor.to(dtype=config.torch_dtype, device=config.torch_device)
-        for tensor in (y_train, y_val, x_train, x_val)
+        for tensor in (y_train, y_val, q_train, q_val)
     )

@@ -118,18 +118,22 @@ and `gamma`; the operator is detached. Use `torch.no_grad()` for inference.
 
 `AdaLFISTA*` learn one `gamma`/`theta` per iteration; `NA_AdaLFISTA*` predict them per
 sample with an LSTM. Weights start at the identity, which reproduces FISTA.
-Constructors are keyword-only:
+The models require an operator with unit column norms; `ucmf.scaling` normalizes
+it and maps the solution back to source strengths. Constructors are keyword-only:
 
 ```python
 from ucmf import NA_AdaLFISTASW
+from ucmf.scaling import normalize_operator, to_source
 
+D, u = normalize_operator(operator)  # D = A U^-1
 model = NA_AdaLFISTASW(num_measurements=m, gamma_init=0.3, theta_init=0.01)
-model.init_normalizers(y, operator)  # once, before solving with NA models
-x = model(y, operator=operator, t=10)
+model.init_normalizers(y, D)  # once, before solving with NA models
+x = model(y, operator=D, t=10)
+q = to_source(x, u)  # source strengths of the original operator
 ```
 
-For subsets, use `operator.select_rows(...)` or `select_mics(...)` and align `y` with
-`operator.rows`. `compile_unrolled(model, t_max)` compiles once for all depths. See the
+For subsets, use `D.select_rows(...)` or `select_mics(...)` and align `y` with
+`D.rows`; the column norms of the full operator stay valid for `to_source`. `compile_unrolled(model, t_max)` compiles once for all depths. See the
 [architecture guide](docs/architecture.md).
 
 ## Acoular integration

@@ -7,6 +7,7 @@ collected in the returned :class:`~ucmf.train.result.TrainingResult`.
 """
 
 from ..optim.neural_augmentation import NeuralAugmentation
+from ..scaling import normalize_operator
 from .result import TrainingResult
 from .utils import (
     batch_loss,
@@ -24,11 +25,13 @@ from .utils import (
 import torch
 
 
-def train_model(config, *, y_train, y_val, x_train=None, x_val=None):
+def train_model(config, *, y_train, y_val, q_train=None, q_val=None):
     """Train an unfolded solver incrementally over stages ``t = 1..config.stages``.
 
     Stage ``t`` runs ``config.steps_per_stage`` Adam steps at solver depth ``t`` and
-    restores the stage's best state by validation loss (as in FA2026). Every
+    restores the stage's best state by validation loss (as in FA2026). The model
+    solves with the column-normalized operator ``D = A U^-1``; supervised losses map its
+    output back to source strengths, see :mod:`ucmf.scaling`. Every
     ``config.val_every`` steps and at the end of each stage, one metrics dict is
     reported to Ray and appended to the history.
 
@@ -41,16 +44,17 @@ def train_model(config, *, y_train, y_val, x_train=None, x_val=None):
         Training measurements of shape ``(N, m)``.
     y_val : Tensor
         Validation measurements of shape ``(M, m)`` for per-stage checkpoint selection.
-    x_train, x_val : Tensor, optional
-        Source targets of shape ``(N, n)`` / ``(M, n)``; required for 'mse' and 'nmse'.
+    q_train, q_val : Tensor, optional
+        Source strengths ``q`` of shape ``(N, n)`` / ``(M, n)`` for the unnormalized
+        operator; required for 'mse' and 'nmse'.
 
     Returns
     -------
     TrainingResult
         History, best validation loss of the last stage, and the trained state.
     """
-    y_train, y_val, x_train, x_val = prepare_data(config, y_train, y_val, x_train, x_val)
-    operator = build_operator(config)
+    y_train, y_val, q_train, q_val = prepare_data(config, y_train, y_val, q_train, q_val)
+    operator, column_norms = normalize_operator(build_operator(config))
     model = build_model(config)
     if isinstance(model, NeuralAugmentation):
         model.init_normalizers(y_train[: config.batch_size], operator)
@@ -66,8 +70,10 @@ def train_model(config, *, y_train, y_val, x_train=None, x_val=None):
             optimizer.zero_grad()
             indices = next(batches)
             y_batch = y_train[indices]
-            x_batch = x_train[indices] if config.supervised else None
-            loss = batch_loss(config, model(y_batch, t=stage, operator=operator), y_batch, x_batch, operator)
+            q_batch = q_train[indices] if config.supervised else None
+            loss = batch_loss(
+                config, model(y_batch, t=stage, operator=operator), y_batch, q_batch, operator, column_norms
+            )
             loss.backward()
             if config.grad_clip_norm is not None:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip_norm)
@@ -75,7 +81,7 @@ def train_model(config, *, y_train, y_val, x_train=None, x_val=None):
 
             if step % config.val_every != 0 and step != config.steps_per_stage:
                 continue
-            val_loss = evaluate(config, model, y_val, x_val, operator, stage)
+            val_loss = evaluate(config, model, y_val, q_val, operator, column_norms, stage)
             if val_loss < stage_best_val_loss:
                 stage_best_val_loss = val_loss
                 copy_state(best_state, model)
