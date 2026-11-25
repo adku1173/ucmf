@@ -12,6 +12,41 @@ from ..scaling import to_source
 import torch
 
 
+def _partition(group, batch_size, train_ratio, generator):
+    """Split the indices ``group`` per problem at random into ``(B, k)`` train and the val rest."""
+    num_train = round(train_ratio * group.numel())
+    order = torch.rand(batch_size, group.numel(), generator=generator, device=group.device).argsort(dim=-1)
+    return group[order[:, :num_train]], group[order[:, num_train:]]
+
+
+def split_rows(operator, y, train_ratio, generator):
+    """CV split of the scalar rows per problem; real and imaginary parts are independent.
+
+    Returns ``(op_t, train_rows, val_rows)`` with local row indices of shape ``(B, k)``;
+    ``op_t`` needs ``select_rows`` (a dense operator).
+    """
+    train, val = _partition(torch.arange(y.shape[-1], device=y.device), y.shape[0], train_ratio, generator)
+    train, val = train.sort(dim=-1).values, val.sort(dim=-1).values
+    return operator.select_rows(train), train, val
+
+
+def split_complex_rows(operator, y, train_ratio, generator):
+    """CV split of the complex CSM entries per problem; Re and Im of an entry stay together.
+
+    Diagonal (real-only) and off-diagonal entries are split separately with the same ratio, so
+    all problems get the same number of rows. Requires a ``CMFDictionary``; see :func:`split_rows`.
+    """
+    hvec = operator.hvec
+    off_diagonal = hvec.real_i != hvec.real_j
+    real_rows = torch.arange(hvec.num_real, device=y.device)
+    imag_rows = hvec.num_real + off_diagonal.cumsum(0) - 1  # imaginary row of each off-diagonal real row
+    diagonal_t, diagonal_v = _partition(real_rows[~off_diagonal], y.shape[0], train_ratio, generator)
+    off_t, off_v = _partition(real_rows[off_diagonal], y.shape[0], train_ratio, generator)
+    train = torch.cat((diagonal_t, off_t, imag_rows[off_t]), dim=-1).sort(dim=-1).values
+    val = torch.cat((diagonal_v, off_v, imag_rows[off_v]), dim=-1).sort(dim=-1).values
+    return operator.select_rows(train), train, val
+
+
 def weighted_mean(outputs, criterion, w):
     """Mean of ``criterion(x_k)`` over ``[x_1, ..., x_t]`` with weights ``w ** (t - k)``.
 
