@@ -6,11 +6,13 @@ import pytest
 
 pytest.importorskip('ray')
 
+import math  # noqa: E402
+
 from ucmf import AdaLFISTASW  # noqa: E402
 from ucmf.optim.compile import all_iterates  # noqa: E402
 from ucmf.optim.operator import MatrixMult  # noqa: E402
 from ucmf.train import TrainingConfig, train_model  # noqa: E402
-from ucmf.train.objectives import build_loss, lasso, nmse, weighted_mean  # noqa: E402
+from ucmf.train.objectives import bic, build_loss, lasso, nmse, weighted_mean  # noqa: E402
 
 import torch  # noqa: E402
 
@@ -74,11 +76,34 @@ def make_config(loss, **loss_kwargs):
     )
 
 
-def test_unsupervised_lasso_trains_without_targets():
-    config = make_config('lasso', lam=0.1)
+def test_bic_matches_formula_with_constant_eps():
+    rng = torch.Generator().manual_seed(3)
+    matrix = torch.randn(M, N_DIM, dtype=torch.float64, generator=rng)
+    x_hat = torch.rand(BATCH, N_DIM, dtype=torch.float64, generator=rng).requires_grad_()
+    y = torch.randn(BATCH, M, dtype=torch.float64, generator=rng)
+    eps = 0.01 * x_hat.detach().amax(-1, keepdim=True)  # a constant: no gradient through the maximum
+    count = (1 - torch.exp(-x_hat.square() / (2 * eps.square()))).sum(-1)
+    expected = (M * torch.log((x_hat @ matrix.T - y).square().sum(-1) / M) + math.log(M) * count).mean()
+    actual = bic(x_hat, y, MatrixMult(matrix), 0.01)
+    torch.testing.assert_close(actual, expected)
+    torch.testing.assert_close(*(torch.autograd.grad(value, x_hat)[0] for value in (actual, expected)))
+
+
+def test_bic_of_the_zero_solution_is_finite():
+    y = torch.randn(BATCH, M, dtype=torch.float64, generator=torch.Generator().manual_seed(4))
+    x_hat = torch.zeros(BATCH, N_DIM, dtype=torch.float64, requires_grad=True)
+    value = bic(x_hat, y, MatrixMult(torch.ones(M, N_DIM, dtype=torch.float64)), 0.01)
+    expected = (M * torch.log(y.square().sum(-1) / M)).mean()  # no active coefficients
+    torch.testing.assert_close(value, expected)
+    assert torch.isfinite(torch.autograd.grad(value, x_hat)[0]).all()
+
+
+@pytest.mark.parametrize(('loss', 'loss_kwargs'), [('lasso', {'lam': 0.1}), ('bic', {})])
+def test_unsupervised_objectives_train_without_targets(loss, loss_kwargs):
+    config = make_config(loss, **loss_kwargs)
     y = config.operator_kwargs['matrix'] @ torch.rand(N_DIM, 2 * BATCH, dtype=torch.float64)
     result = train_model(config, y_train=y.T, y_val=y.T[:BATCH])
-    assert len(result.history) == 4 and result.best_val_loss > 0
+    assert len(result.history) == 4 and math.isfinite(result.best_val_loss)
 
 
 @pytest.mark.parametrize(

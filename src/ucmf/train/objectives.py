@@ -4,6 +4,7 @@
 compiled. Each objective returns the loss; :func:`weighted_mean` explains ``w``.
 """
 
+import math
 from functools import partial
 
 from ..scaling import to_source
@@ -36,6 +37,20 @@ def lasso(x_hat, y, operator, lam):
     return (data_fit + lam * x_hat.abs().sum(dim=-1)).mean()
 
 
+def bic(x_hat, y, operator, alpha):
+    """Batch-mean smoothed BIC ``m log(||D x_hat - y||^2 / m) + log(m) ||x_hat||_{0,eps}``.
+
+    The smoothed count is ``sum_j (1 - exp(-x_j^2 / (2 eps^2)))`` (Gaussian family).
+    ``eps = alpha ||x_hat||_inf`` per sample is detached, so it acts as a constant. Its lower
+    bound keeps the frequent zero solution finite, where ``eps`` would vanish (``0 / 0``).
+    """
+    m = y.shape[-1]
+    variance = torch.linalg.vector_norm(operator.forward(x_hat) - y, dim=-1).square() / m
+    eps = alpha * x_hat.detach().abs().amax(dim=-1, keepdim=True).clamp_min(1e-12)
+    count = (1 - torch.exp(-x_hat.square() / (2 * eps.square()))).sum(dim=-1)
+    return (m * torch.log(variance) + math.log(m) * count).mean()
+
+
 def nmse_loss(solve, y, q, t, operator, column_norms, *, w):
     """Weighted NMSE of the iterates against the source-strength targets ``q``."""
     return weighted_mean(solve(y, operator, t), lambda x_hat: nmse(x_hat, q, column_norms), w)
@@ -46,7 +61,12 @@ def lasso_loss(solve, y, q, t, operator, column_norms, *, w, lam):
     return weighted_mean(solve(y, operator, t), lambda x_hat: lasso(x_hat, y, operator, lam), w)
 
 
-OBJECTIVES = {'nmse': nmse_loss, 'lasso': lasso_loss}
+def bic_loss(solve, y, q, t, operator, column_norms, *, w, alpha=1e-2):
+    """Weighted smoothed BIC of the iterates; ``alpha = 1e-2`` puts ``eps`` 20 dB below the max."""
+    return weighted_mean(solve(y, operator, t), lambda x_hat: bic(x_hat, y, operator, alpha), w)
+
+
+OBJECTIVES = {'nmse': nmse_loss, 'lasso': lasso_loss, 'bic': bic_loss}
 
 
 def build_loss(config):
