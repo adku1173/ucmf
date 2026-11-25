@@ -30,14 +30,25 @@ def nmse(x_hat, q, u):
     return (error / torch.linalg.vector_norm(q, dim=-1).square()).mean()
 
 
+def lasso(x_hat, y, operator, lam):
+    """Batch-mean ``||D x_hat - y||^2 / (2 m) + lam ||x_hat||_1`` with ``D = operator``."""
+    data_fit = torch.linalg.vector_norm(operator.forward(x_hat) - y, dim=-1).square() / (2 * y.shape[-1])
+    return (data_fit + lam * x_hat.abs().sum(dim=-1)).mean()
+
+
 def nmse_loss(solve, y, q, t, operator, column_norms, *, w):
     """Weighted NMSE of the iterates against the source-strength targets ``q``."""
     return weighted_mean(solve(y, operator, t), lambda x_hat: nmse(x_hat, q, column_norms), w)
 
 
-OBJECTIVES = {'nmse': nmse_loss}
+def lasso_loss(solve, y, q, t, operator, column_norms, *, w, lam):
+    """Weighted LASSO criterion of the iterates; equireg makes ``lam`` relative to lambda_max."""
+    return weighted_mean(solve(y, operator, t), lambda x_hat: lasso(x_hat, y, operator, lam), w)
+
+
+OBJECTIVES = {'nmse': nmse_loss, 'lasso': lasso_loss}
 
 
 def build_loss(config):
-    """Bind the objective ``config.loss`` to the iterate weight ``config.w``."""
-    return partial(OBJECTIVES[config.loss], w=config.w)
+    """Bind the objective ``config.loss`` to ``config.w`` and ``config.loss_kwargs``."""
+    return partial(OBJECTIVES[config.loss], w=config.w, **config.loss_kwargs)

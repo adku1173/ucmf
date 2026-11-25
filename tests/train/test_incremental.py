@@ -35,6 +35,7 @@ def make_config(A, **overrides):
         'loss': 'nmse',
         'device': 'cpu',
         'precision': 'float64',
+        'compile': False,  # eager for speed; test_compiled_training_matches_eager covers compile
     }
     return TrainingConfig(**{**config, **overrides})
 

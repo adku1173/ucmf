@@ -1,5 +1,6 @@
 """Configuration of incremental unfolded-solver training."""
 
+import inspect
 from dataclasses import dataclass, field
 
 from .objectives import OBJECTIVES
@@ -47,6 +48,8 @@ class TrainingConfig:
         Adam learning rate; a fresh optimizer starts at every stage.
     loss : str
         Objective of :mod:`ucmf.train.objectives`; 'nmse' (default) needs source targets.
+    loss_kwargs : dict
+        Keyword-only parameters of the objective besides ``w``, e.g. ``{'lam': 0.1}`` for 'lasso'.
     w : float
         Weight base in ``[0, 1]`` of earlier iterates: iterate ``k`` of depth ``t`` enters
         with ``w ** (t - k)``; 0 (default) uses only the final iterate.
@@ -64,8 +67,9 @@ class TrainingConfig:
     precision : str
         One of ``PRECISIONS`` (default 'float32'); the operator must already match.
     compile : bool
-        If True, solve with :func:`~ucmf.optim.compile.compile_unrolled` of depth ``stages``:
-        one graph serves all stages, which still compute all ``stages`` iterations.
+        If True (default), solve with :func:`~ucmf.optim.compile.compile_unrolled` of
+        depth ``stages``: one graph serves all stages, which still compute all ``stages``
+        iterations.
     """
 
     model_name: str
@@ -77,6 +81,7 @@ class TrainingConfig:
     batch_size: int = 256
     learning_rate: float = 1e-3
     loss: str = 'nmse'
+    loss_kwargs: dict = field(default_factory=dict)
     w: float = 0.0
     data_scaling: str = 'equireg'
     val_every: int = 1
@@ -84,7 +89,7 @@ class TrainingConfig:
     grad_clip_norm: float | None = None
     device: str = 'cuda'
     precision: str = 'float32'
-    compile: bool = False
+    compile: bool = True
 
     def __post_init__(self):
         """Validate the configuration."""
@@ -94,6 +99,13 @@ class TrainingConfig:
             raise ValueError(f'operator_name must be one of {OPERATOR_NAMES}, got {self.operator_name!r}.')
         if self.loss not in LOSSES:
             raise ValueError(f'loss must be one of {LOSSES}, got {self.loss!r}.')
+        parameters = inspect.signature(OBJECTIVES[self.loss]).parameters.values()
+        keywords = {p.name for p in parameters if p.kind is p.KEYWORD_ONLY} - {'w'}
+        required = {p.name for p in parameters if p.kind is p.KEYWORD_ONLY and p.default is p.empty} - {'w'}
+        if not required <= set(self.loss_kwargs) <= keywords:
+            raise ValueError(
+                f'loss {self.loss!r} needs loss_kwargs {sorted(required)}, got {sorted(self.loss_kwargs)}.'
+            )
         if not 0 <= self.w <= 1:
             raise ValueError(f'w must lie in [0, 1], got {self.w}.')
         if self.data_scaling not in DATA_SCALINGS:
