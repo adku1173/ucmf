@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass, field
 
+from .objectives import OBJECTIVES
+
 import torch
 
 MODEL_NAMES = (
@@ -14,8 +16,8 @@ MODEL_NAMES = (
     'NA_AdaLFISTASW',
     'NA_AdaLFISTASWR',
 )
-LOSSES = ('mse', 'nmse', 'relative_residual')
-SUPERVISED_LOSSES = ('mse', 'nmse')
+LOSSES = tuple(OBJECTIVES)
+SUPERVISED_LOSSES = ('nmse',)
 DATA_SCALINGS = ('none', 'equireg')
 OPERATOR_NAMES = ('MatrixMult', 'CMFDictionary', 'CMFPropagation')
 PRECISIONS = ('float32', 'float64', 'bfloat16')
@@ -44,7 +46,10 @@ class TrainingConfig:
     learning_rate : float
         Adam learning rate; a fresh optimizer starts at every stage.
     loss : str
-        'mse' or 'nmse' (supervised, need source targets) or 'relative_residual'.
+        Objective of :mod:`ucmf.train.objectives`; 'nmse' (default) needs source targets.
+    w : float
+        Weight base in ``[0, 1]`` of earlier iterates: iterate ``k`` of depth ``t`` enters
+        with ``w ** (t - k)``; 0 (default) uses only the final iterate.
     data_scaling : str
         'equireg' (default) divides measurements and targets per sample by
         ``lambda_max`` of the normalized operator (nonnegative models only); 'none' keeps them.
@@ -68,7 +73,8 @@ class TrainingConfig:
     steps_per_stage: int = 100
     batch_size: int = 256
     learning_rate: float = 1e-3
-    loss: str = 'mse'
+    loss: str = 'nmse'
+    w: float = 0.0
     data_scaling: str = 'equireg'
     val_every: int = 1
     seed: int = 0
@@ -84,6 +90,8 @@ class TrainingConfig:
             raise ValueError(f'operator_name must be one of {OPERATOR_NAMES}, got {self.operator_name!r}.')
         if self.loss not in LOSSES:
             raise ValueError(f'loss must be one of {LOSSES}, got {self.loss!r}.')
+        if not 0 <= self.w <= 1:
+            raise ValueError(f'w must lie in [0, 1], got {self.w}.')
         if self.data_scaling not in DATA_SCALINGS:
             raise ValueError(f'data_scaling must be one of {DATA_SCALINGS}, got {self.data_scaling!r}.')
         if self.data_scaling == 'equireg' and self.model_kwargs.get('nonnegative', True) is False:

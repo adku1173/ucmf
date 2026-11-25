@@ -5,7 +5,7 @@ import pytest
 pytest.importorskip('ray')
 
 from ucmf.train import TrainingConfig, TrainingResult, train_model  # noqa: E402
-from ucmf.train.utils import batch_loss, iterate_batches  # noqa: E402
+from ucmf.train.utils import iterate_batches  # noqa: E402
 
 import torch  # noqa: E402
 
@@ -65,35 +65,21 @@ def test_batches_cover_each_epoch_without_replacement():
     assert sorted(epoch.tolist()) == list(range(N_SAMPLES))
 
 
-@pytest.mark.parametrize('loss', ['mse', 'nmse'])
-def test_supervised_loss_compares_source_strengths(loss):
-    config = make_config(torch.eye(M, dtype=torch.float64), loss=loss)
-    column_norms = torch.rand(N_DIM, dtype=torch.float64) + 0.5
-    q = torch.rand(4, N_DIM, dtype=torch.float64)
-    assert batch_loss(config, column_norms * q, None, q, None, column_norms).item() == pytest.approx(0, abs=1e-12)
-
-
-@pytest.mark.parametrize(('loss', 'per_column'), [('relative_residual', True), ('nmse', False)])
-def test_training_is_invariant_to_scaling_of_A(problem, loss, per_column):
-    """``A diag(s)`` with targets ``q / s`` normalizes to the same problem.
-
-    The NMSE in ``q`` weights the columns by ``1 / s``; it is invariant only to a global scale.
-    """
+def test_training_is_invariant_to_a_global_scale_of_A(problem):
+    """``s A`` with targets ``q / s`` normalizes to the same problem."""
     A, y, q = problem
-    s = torch.rand(N_DIM, dtype=torch.float64) + 0.5 if per_column else torch.tensor(3.0, dtype=torch.float64)
-    scaled = train_model(make_config(A * s, loss=loss), y_train=y, y_val=y[:4], q_train=q / s, q_val=q[:4] / s)
-    reference = run(problem, loss=loss)
-    for entry, expected in zip(scaled.history, reference.history, strict=True):
+    scaled = train_model(make_config(3.0 * A), y_train=y, y_val=y[:4], q_train=q / 3.0, q_val=q[:4] / 3.0)
+    for entry, expected in zip(scaled.history, run(problem).history, strict=True):
         assert entry['train_loss'] == pytest.approx(expected['train_loss'])
 
 
 def test_equireg_is_invariant_to_per_sample_data_scaling(problem):
-    """The MSE itself is scale dependent; equiregularization removes the sample scales."""
+    """Equiregularization removes the per-sample scales before the solver sees the data."""
     A, y, q = problem
     c = torch.rand(N_SAMPLES, 1, dtype=torch.float64) * 10 + 0.1
-    config = make_config(A, loss='mse')
+    config = make_config(A)
     scaled = train_model(config, y_train=c * y, y_val=c[:4] * y[:4], q_train=c * q, q_val=c[:4] * q[:4])
-    reference = run(problem, loss='mse')
+    reference = run(problem)
     for entry, expected in zip(scaled.history, reference.history, strict=True):
         assert entry['train_loss'] == pytest.approx(expected['train_loss'])
 
@@ -106,10 +92,10 @@ def test_equireg_requires_nonnegative_model(problem):
     make_config(A, model_kwargs=model_kwargs, data_scaling='none')
 
 
-def test_unsupervised_loss_needs_no_targets(problem):
-    A, y, _ = problem
-    result = train_model(make_config(A, loss='relative_residual'), y_train=y, y_val=y[:4])
-    assert result.best_val_loss >= 0
+def test_weighted_iterates_change_the_loss(problem):
+    # Stage 1 has one iterate, so both runs agree until the first step of stage 2.
+    weighted, final = run(problem, w=0.5).history[STEPS], run(problem).history[STEPS]
+    assert weighted['train_loss'] > final['train_loss']  # the earlier iterate adds a positive term
 
 
 def test_supervised_loss_requires_targets(problem):
@@ -125,6 +111,7 @@ def test_invalid_config_rejected(problem):
         ({'model_name': 'FISTA'}, 'model_name'),
         ({'operator_name': 'Nope'}, 'operator_name'),
         ({'loss': 'nope'}, 'loss'),
+        ({'w': 1.5}, 'w must lie'),
         ({'data_scaling': 'nope'}, 'data_scaling'),
         ({'stages': 0}, 'stages'),
         ({'batch_size': 0}, 'batch_size'),

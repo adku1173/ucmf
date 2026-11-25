@@ -1,34 +1,14 @@
-"""Losses, model/data helpers, and the Ray Tune report hook for training."""
+"""Model/data helpers and the Ray Tune report hook for training."""
 
 import warnings
 
 import ucmf
 
 from ..optim import operator as operator_module
-from ..scaling import lambda_max, to_source
+from ..scaling import lambda_max
 
 import ray.tune
 import torch
-import torch.nn.functional as F
-
-
-def batch_loss(config, x_hat, y, q_true, operator, column_norms):
-    """Batch-mean ``config.loss`` of the normalized solution ``x_hat`` for ``operator = A U^-1``.
-
-    'mse'/'nmse' compare the source strengths ``x_hat / column_norms`` with ``q_true``;
-    'relative_residual' compares ``operator.forward(x_hat)`` with ``y``.
-    """
-    if config.loss == 'relative_residual':
-        residual = operator.forward(x_hat) - y
-        numerator = torch.linalg.vector_norm(residual, dim=1) ** 2
-        denominator = torch.linalg.vector_norm(y, dim=1).clamp_min(1e-12) ** 2
-        return (0.5 * numerator / denominator).mean()
-    q_hat = to_source(x_hat, column_norms)
-    if config.loss == 'mse':
-        return F.mse_loss(q_hat, q_true)
-    numerator = torch.linalg.vector_norm(q_hat - q_true, dim=1) ** 2
-    denominator = torch.linalg.vector_norm(q_true, dim=1).clamp_min(1e-12) ** 2
-    return (numerator / denominator).mean()
 
 
 def ray_report(metrics):
@@ -77,11 +57,10 @@ def build_optimizer(config, model):
     return torch.optim.Adam(model.parameters(), lr=config.learning_rate)
 
 
-def evaluate(config, model, y, q, operator, column_norms, stage):
-    """No-grad loss of the model at solver depth ``stage`` on ``(y, q)``."""
+def evaluate(objective, model, y, q, operator, column_norms, stage):
+    """No-grad ``objective`` of the model at solver depth ``stage`` on ``(y, q)``."""
     with torch.no_grad():
-        x_hat = model(y, t=stage, operator=operator)
-        return batch_loss(config, x_hat, y, q, operator, column_norms).item()
+        return objective(model, y, q, stage, operator, column_norms).item()
 
 
 def prepare_data(config, operator, y_train, y_val, q_train, q_val):
