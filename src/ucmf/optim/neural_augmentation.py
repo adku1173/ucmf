@@ -62,7 +62,8 @@ class NeuralAugmentation:
     ``residual_gradient(z) -> (y - A z, direction)``. The controller is not tied
     to a fixed depth, so any ``t >= 0`` is allowed. Call :meth:`init_normalizers`
     once before solving; until then the outputs are NaN. All arguments are
-    keyword-only.
+    keyword-only. The operator must have unit column norms (unchecked
+    precondition), see :func:`ucmf.scaling.normalize_operator`.
 
     Parameters
     ----------

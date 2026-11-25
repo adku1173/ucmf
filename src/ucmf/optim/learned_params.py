@@ -12,6 +12,8 @@ class LearnedParams:
 
     Combine with a weight base that implements ``_prepare_update``; the mixin
     owns the step parameters and ``forward``. All arguments are keyword-only.
+    The operator must have unit column norms (unchecked precondition), see
+    :func:`ucmf.scaling.normalize_operator`.
 
     Parameters
     ----------
