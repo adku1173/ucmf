@@ -5,8 +5,7 @@ Status: Accepted — requested by the author.
 ## Context
 
 FA2026 combined NA controllers (`NA_ALFISTA`, `NA_LFISTA`) with ADA wrappers. In ucmf,
-unfolded models own their forward ([0004](0004-single-weight-ada-lfista.md),
-[0006](0006-two-matrix-ada-lfista.md)). Four weight types × two step-parameter kinds
+unfolded models own their forward ([0006](0006-two-matrix-ada-lfista.md)). Four weight types × two step-parameter kinds
 must not duplicate code.
 
 ## Decision

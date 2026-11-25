@@ -5,6 +5,35 @@ from .callbacks import IntermediateOutputCollector
 import torch
 
 
+def all_iterates(model, y, t, **forward_kwargs):
+    """Run ``t >= 1`` iterations and return all iterates ``x_1, ..., x_t``.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Solver; its callbacks are restored afterwards, also if the solve raises.
+    y : Tensor
+        Measurements of shape ``(B, m)``.
+    t : int
+        Number of iterations.
+    **forward_kwargs
+        Further arguments of ``model.forward``, e.g. ``operator``.
+
+    Returns
+    -------
+    Tensor
+        Iterates of shape ``(t, B, n)`` with their computational graphs.
+    """
+    collector = IntermediateOutputCollector()
+    previous_callbacks = model.callbacks
+    model.callbacks = [*previous_callbacks, collector]
+    try:
+        model(y, t=t, **forward_kwargs)
+    finally:
+        model.callbacks = previous_callbacks
+    return torch.stack(collector.intermediates)
+
+
 def compile_unrolled(model, t_max, mode='reduce-overhead'):
     """Return a compiled function giving all iterates ``x_1, ..., x_{t_max}``.
 
@@ -14,6 +43,12 @@ def compile_unrolled(model, t_max, mode='reduce-overhead'):
     ``t_max``; the result of ``t`` iterations is ``out[t - 1]``. Iterations
     after ``t`` are still computed; they do not change ``x_t`` and contribute
     zero gradient to it.
+
+    The model is an input of the compiled graph, not a captured constant, so new
+    instances of the same model type (e.g. in a hyperparameter search) reuse the
+    graph. Each further model type, ``t_max``, or ``mode`` compiles anew; after
+    ``torch._dynamo.config.recompile_limit`` (8) such variants, torch falls back
+    to eager execution.
 
     Parameters
     ----------
@@ -31,15 +66,9 @@ def compile_unrolled(model, t_max, mode='reduce-overhead'):
         ``f(y, **forward_kwargs)`` returning a tensor of shape ``(t_max, B, n)``;
         ``forward_kwargs`` are passed to ``model.forward`` with ``t = t_max``.
     """
-    collector = IntermediateOutputCollector()
 
-    def all_intermediates(y, **forward_kwargs):
-        previous_callbacks = model.callbacks
-        model.callbacks = [*previous_callbacks, collector]
-        try:
-            model(y, t=t_max, **forward_kwargs)
-        finally:
-            model.callbacks = previous_callbacks
-        return torch.stack(collector.intermediates)
+    def unrolled(solver, y, **forward_kwargs):
+        return all_iterates(solver, y, t_max, **forward_kwargs)  # t_max stays a graph constant
 
-    return torch.compile(all_intermediates, mode=mode)
+    compiled = torch.compile(unrolled, mode=mode)
+    return lambda y, **forward_kwargs: compiled(model, y, **forward_kwargs)

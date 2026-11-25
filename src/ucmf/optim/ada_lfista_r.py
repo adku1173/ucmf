@@ -23,7 +23,6 @@ class _ReducedTwoWeights(FISTA):
         if num_mics <= int(r_diag):
             raise ValueError(f'num_mics must exceed {int(r_diag)} for r_diag={r_diag}, got {num_mics}.')
         self.num_mics, self.r_diag = num_mics, r_diag
-        self.num_measurements = num_mics * (num_mics - int(r_diag))
         self.Br1_re = nn.Parameter(torch.eye(num_mics))
         self.Br1_im = nn.Parameter(torch.zeros(num_mics, num_mics))
         self.Br2_re = nn.Parameter(torch.eye(num_mics))

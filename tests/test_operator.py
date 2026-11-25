@@ -53,6 +53,68 @@ def test_forward_adjoint_and_metadata(operator, matrix):
     assert operator.dtype == matrix.dtype and operator.device == matrix.device
 
 
+@parametrize_with_cases(OPERATOR, cases=OperatorCases)
+def test_column_norms_match_matrix(operator, matrix):
+    torch.testing.assert_close(operator.column_norms(), torch.linalg.vector_norm(matrix, dim=-2))
+
+
+@pytest.mark.parametrize('mics', [torch.tensor([4, 0, 2]), torch.tensor([[4, 0, 1], [0, 3, 2], [4, 3, 2]])])
+@parametrize_with_cases(OPERATOR, cases=OperatorCases, has_tag='cmf')
+def test_column_norms_of_mic_subset_use_active_rows(operator, matrix, mics):
+    sub = operator.select_mics(mics)
+    expected = torch.linalg.vector_norm(per_problem(matrix, sub.rows, dim=0), dim=-2)
+    torch.testing.assert_close(sub.column_norms().expand_as(expected), expected)  # shared stays (n,)
+
+
+@pytest.mark.parametrize('rows', [torch.tensor([5, 0, 2, 3]), torch.tensor([[0, 2, 5, 1], [1, 2, 3, 4], [4, 0, 1, 3]])])
+@parametrize_with_cases(OPERATOR, cases=OperatorCases, has_tag='rows')
+def test_column_norms_of_row_subset_use_active_rows(operator, matrix, rows):
+    expected = torch.linalg.vector_norm(per_problem(matrix, rows, dim=0), dim=-2)
+    torch.testing.assert_close(operator.select_rows(rows).column_norms().expand_as(expected), expected)
+
+
+def random_scale(matrix, per_problem):
+    shape = (BATCH_SIZE, matrix.shape[-1]) if per_problem else (matrix.shape[-1],)
+    return torch.rand(shape, dtype=matrix.dtype, generator=torch.Generator().manual_seed(3)) + 0.5
+
+
+@pytest.mark.parametrize('per_problem_scale', [False, True], ids=['shared', 'per-problem'])
+@parametrize_with_cases(OPERATOR, cases=OperatorCases)
+def test_scale_columns_matches_scaled_matrix(operator, matrix, per_problem_scale):
+    scale = random_scale(matrix, per_problem_scale)
+    scaled = operator.scale_columns(scale)
+    assert type(scaled) is type(operator) and scaled.rows is None
+    assert scaled.batch_size == (BATCH_SIZE if operator.batch_size or per_problem_scale else None)
+    assert_matches_on_random_inputs(scaled, matrix * scale.unsqueeze(-2))
+
+
+@parametrize_with_cases(OPERATOR, cases=OperatorCases, has_tag='cmf')
+def test_scale_columns_commutes_with_mic_selection(operator, matrix):
+    scale, mics = random_scale(matrix, True), torch.tensor([[4, 0, 1], [0, 3, 2], [4, 3, 2]])
+    scaled = operator.select_mics(mics).scale_columns(scale)
+    reference = operator.scale_columns(scale).select_mics(mics)
+    assert type(scaled) is type(operator)
+    torch.testing.assert_close(scaled.rows, reference.rows)
+    torch.testing.assert_close(scaled.mics, reference.mics)
+    assert_matches_on_random_inputs(scaled, cmf_matrix(reference.H, operator.r_diag))
+
+
+@parametrize_with_cases(OPERATOR, cases=OperatorCases, has_tag='rows')
+def test_scale_columns_commutes_with_row_selection(operator, matrix):
+    scale, rows = random_scale(matrix, True), torch.tensor([5, 0, 2, 3])
+    scaled = operator.select_rows(rows).scale_columns(scale)
+    torch.testing.assert_close(scaled.rows, rows)
+    assert_matches_on_random_inputs(scaled, operator.scale_columns(scale).select_rows(rows).matrix)
+
+
+@pytest.mark.parametrize(('shape', 'message'), [((3,), 'with n=4'), ((2, 4), 'batch size 2 but the operator has 3')])
+@parametrize_with_cases(OPERATOR, cases=OperatorCases)
+def test_scale_validation(operator, matrix, shape, message):
+    batched = operator.select_columns(torch.tensor([[0, 1, 2, 3], [1, 2, 3, 0], [2, 3, 0, 1]]))  # n = 4, B = 3
+    with pytest.raises(ValueError, match=message):
+        batched.scale_columns(torch.ones(shape, dtype=matrix.dtype))
+
+
 @pytest.mark.parametrize(
     'cols', [torch.tensor([3, 0]), torch.tensor([[0, 3], [2, 1], [3, 2]])], ids=['shared', 'per-problem']
 )
@@ -72,6 +134,7 @@ def test_select_mics_matches_subarray_and_original_rows(operator, matrix, mics):
     """Selected microphones form the CSM block of the subarray; rows and mics refer to the full array."""
     H, r_diag = operator.H, operator.r_diag
     sub = operator.select_mics(mics)
+    torch.testing.assert_close(operator.mic_rows(mics), sub.rows)
     sorted_mics = mics.sort(dim=-1).values  # the block keeps ascending microphone order
     torch.testing.assert_close(sub.mics, sorted_mics)
     assert_matches_on_random_inputs(sub, cmf_matrix(per_problem(H, sorted_mics, dim=0), r_diag))
@@ -85,18 +148,6 @@ def test_select_mics_matches_subarray_and_original_rows(operator, matrix, mics):
     reduced = nested.select_columns(torch.tensor([3, 0]))
     torch.testing.assert_close(reduced.rows, nested.rows)
     torch.testing.assert_close(reduced.mics, nested.mics)
-
-
-@parametrize_with_cases(OPERATOR, cases=OperatorCases, has_tag='cmf')
-def test_transformed_propagates_through_br_and_keeps_subset(operator, matrix):
-    mics = torch.tensor([[4, 0, 1], [0, 3, 2], [4, 3, 2]])
-    sub = operator.select_mics(mics)
-    Br = torch.randn(3, 3, dtype=operator.H.dtype, generator=torch.Generator().manual_seed(6))
-    transformed = sub.transformed(Br)
-    H_sub = per_problem(operator.H, mics.sort(dim=-1).values, dim=0)
-    assert_matches_on_random_inputs(transformed, cmf_matrix(Br @ H_sub, operator.r_diag))
-    torch.testing.assert_close(transformed.rows, sub.rows)
-    torch.testing.assert_close(transformed.mics, sub.mics)
 
 
 @pytest.mark.parametrize(

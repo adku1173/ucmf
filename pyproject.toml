@@ -15,6 +15,10 @@ dependencies = [
     "torch>=2.2",
 ]
 
+[project.optional-dependencies]
+# Training (ucmf.train) needs Ray Tune; the core package stays Ray-free.
+train = ["ray[tune]>=2.60"]
+
 [dependency-groups]
 examples = ["acoular", "matplotlib", "pylops", "threadpoolctl"]
 dev = [
@@ -54,7 +58,7 @@ max-doc-length = 100
 [tool.ruff.lint.isort]
 section-order = ["future", "standard-library", "acoular", "first-party", "local-folder", "third-party"]
 # Test-only modules, importable because pytest puts tests/ on sys.path.
-known-local-folder = ["cases", "helpers"]
+known-local-folder = ["cases", "configs", "helpers"]
 
 [tool.ruff.lint.isort.sections]
 acoular = ["acoular"]

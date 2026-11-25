@@ -34,6 +34,16 @@ def _validate_index(index, name, device, batch_size):
     return index.long()
 
 
+def _validate_scale(scale, operator):
+    """Check a real shared ``(n,)`` or per-problem ``(B, n)`` column scale; no value checks."""
+    validate_tensor(scale, name='scale', dtype=operator.dtype, device=operator.device)
+    if scale.ndim not in (1, 2) or scale.shape[-1] != operator.shape[1]:
+        raise ValueError(f'scale must have shape (n,) or (B, n) with n={operator.shape[1]}, got {tuple(scale.shape)}.')
+    if scale.ndim == 2 and operator.batch_size is not None and scale.shape[0] != operator.batch_size:
+        raise ValueError(f'scale has batch size {scale.shape[0]} but the operator has {operator.batch_size}.')
+    return scale
+
+
 def _take(tensor, index, dim, batched):
     """Select ``index`` along ``dim`` of a shared or batched tensor; a per-problem index batches."""
     if index.ndim == 1:
@@ -161,6 +171,32 @@ class MatrixMult(LinearOperator):
         if self.matrix.ndim == 2:
             return r @ self.matrix
         return torch.bmm(r.unsqueeze(1), self.matrix).squeeze(1)
+
+    def column_norms(self):
+        """Return the L2 norms of the matrix columns.
+
+        Returns
+        -------
+        Tensor
+            Norms of shape ``(n,)`` for a shared, ``(B, n)`` for a per-problem matrix.
+        """
+        return torch.linalg.vector_norm(self.matrix, dim=-2)
+
+    def scale_columns(self, scale):
+        """Return the operator ``A diag(scale)``; the subset metadata are unchanged.
+
+        Parameters
+        ----------
+        scale : Tensor
+            Positive column factors, shared ``(n,)`` or per problem ``(B, n)``.
+
+        Returns
+        -------
+        MatrixMult
+            Operator of the scaled matrix, per problem if ``scale`` is.
+        """
+        scale = _validate_scale(scale, self)
+        return self._with_matrix(self.matrix * scale.unsqueeze(-2), rows=self.rows)
 
     def _with_matrix(self, matrix, rows):
         op = MatrixMult(matrix, rows=rows)
@@ -418,6 +454,42 @@ class CMFPropagation(LinearOperator):
         csm = torch.complex(real, imag)
         return (self.H.conj() * (csm @ self.H)).real.sum(-2)
 
+    def column_norms(self):
+        """Return the column norms ``||hvec(h_j h_j^H)||_2`` without forming the dictionary.
+
+        Since ``hvec`` is an isometry, the norm is ``||h_j h_j^H||_F = ||h_j||_2^2``.
+        With ``r_diag``, the diagonal entries ``|h_ij|^2`` are missing:
+        ``sqrt(||h_j||_2^4 - sum_i |h_ij|^4)``.
+
+        Returns
+        -------
+        Tensor
+            Norms of shape ``(n,)`` for a shared, ``(B, n)`` for a per-problem ``H``.
+        """
+        power = self.H.abs().square()
+        squared_norms = power.sum(-2).square()
+        if self.r_diag:
+            squared_norms = squared_norms - power.square().sum(-2)
+        return squared_norms.sqrt()
+
+    def scale_columns(self, scale):
+        """Return the operator ``A diag(scale)`` by scaling ``H`` with ``sqrt(scale)``.
+
+        Column ``j`` is quadratic in ``h_j``. ``rows`` and ``mics`` are unchanged.
+
+        Parameters
+        ----------
+        scale : Tensor
+            Positive column factors, shared ``(n,)`` or per problem ``(B, n)``.
+
+        Returns
+        -------
+        CMFPropagation
+            Operator of the scaled propagation matrix, per problem if ``scale`` is.
+        """
+        scale = _validate_scale(scale, self)
+        return self._with_propagation(self.H * scale.sqrt().unsqueeze(-2))
+
     def detached(self):
         """Detach ``H`` while reusing the vectorization and subset metadata."""
         op = copy(self)
@@ -472,23 +544,9 @@ class CMFPropagation(LinearOperator):
         op.rows = self._subset_rows(torch.cat((real_rows, imag_rows), dim=-1))
         return op
 
-    def transformed(self, Br):
-        """Build the operator of the transformed propagation matrix ``Br @ H``.
-
-        With ``r_diag=True``, the diagonal is discarded *after* the transformation.
-        This is not a congruence of the zero-diagonal CSM.
-
-        Parameters
-        ----------
-        Br : Tensor
-            Complex ``(c, c)`` or ``(B, c, c)`` matrix in the current microphone coordinates.
-
-        Returns
-        -------
-        CMFPropagation
-            Operator of ``Br @ H`` with unchanged ``rows`` and ``mics``.
-        """
-        return self._with_propagation(Br @ self.H)
+    def mic_rows(self, index):
+        """Return ``select_mics(index).rows``, the original rows of a microphone block."""
+        return self.select_mics(index).rows
 
 
 class CMFDictionary(MatrixMult):
@@ -560,6 +618,10 @@ class CMFDictionary(MatrixMult):
         # matrix so the new CMFDictionary need not rebuild it from the selected H.
         return self._derived(propagation, super().select_columns(index).matrix)
 
+    def scale_columns(self, scale):
+        """Scale ``H`` and the cached dictionary, see :meth:`CMFPropagation.scale_columns`."""
+        return self._derived(self._propagation.scale_columns(scale), super().scale_columns(scale).matrix)
+
     def select_mics(self, index):
         """Build the dictionary of the selected microphone block.
 
@@ -577,17 +639,9 @@ class CMFDictionary(MatrixMult):
         """
         return self._derived(self._propagation.select_mics(index))
 
-    def transformed(self, Br):
-        """Build the dictionary of ``Br @ H``, see :meth:`CMFPropagation.transformed`.
+    def mic_rows(self, index):
+        """Return the rows of a microphone block without building its dictionary.
 
-        Parameters
-        ----------
-        Br : Tensor
-            Complex ``(c, c)`` or ``(B, c, c)`` matrix in the current microphone coordinates.
-
-        Returns
-        -------
-        CMFDictionary
-            Dictionary of ``Br @ H``.
+        See :meth:`CMFPropagation.mic_rows`.
         """
-        return self._derived(self._propagation.transformed(Br))
+        return self._propagation.mic_rows(index)
