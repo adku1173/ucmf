@@ -58,11 +58,25 @@ def test_best_val_loss_belongs_to_last_stage(problem):
     assert result.best_val_loss == min(last_stage) == result.history[-1]['stage_best_val_loss']
 
 
-def test_batches_cover_each_epoch_without_replacement():
+def test_batches_are_full_and_without_replacement_per_epoch():
     config = make_config(torch.eye(M, dtype=torch.float64), batch_size=5)
     batches = iterate_batches(config, N_SAMPLES)
-    epoch = torch.cat([next(batches) for _ in range(4)])  # 5 + 5 + 5 + 1
-    assert sorted(epoch.tolist()) == list(range(N_SAMPLES))
+    epoch = [next(batches) for _ in range(3)]  # 16 // 5 full batches, one index dropped
+    assert all(batch.shape == (5,) for batch in epoch)
+    assert len(set(torch.cat(epoch).tolist())) == 15
+
+
+def test_too_few_samples_for_one_batch_rejected(problem):
+    with pytest.raises(ValueError, match='fewer than batch_size=32'):
+        run(problem, batch_size=32)
+
+
+def test_compiled_training_matches_eager(problem):
+    torch._dynamo.reset()  # fresh compile cache: the recompile limit would silently fall back to eager
+    compiled, eager = run(problem, compile=True).history, run(problem).history
+    for entry, expected in zip(compiled, eager, strict=True):
+        assert entry['train_loss'] == pytest.approx(expected['train_loss'], rel=1e-9)
+        assert entry['val_loss'] == pytest.approx(expected['val_loss'], rel=1e-9)
 
 
 def test_training_is_invariant_to_a_global_scale_of_A(problem):

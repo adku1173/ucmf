@@ -63,6 +63,9 @@ class TrainingConfig:
         Torch device string ('cpu', 'cuda', ...); model and data are moved there.
     precision : str
         One of ``PRECISIONS`` (default 'float32'); the operator must already match.
+    compile : bool
+        If True, solve with :func:`~ucmf.optim.compile.compile_unrolled` of depth ``stages``:
+        one graph serves all stages, which still compute all ``stages`` iterations.
     """
 
     model_name: str
@@ -81,6 +84,7 @@ class TrainingConfig:
     grad_clip_norm: float | None = None
     device: str = 'cuda'
     precision: str = 'float32'
+    compile: bool = False
 
     def __post_init__(self):
         """Validate the configuration."""

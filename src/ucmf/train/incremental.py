@@ -14,6 +14,7 @@ from .utils import (
     build_model,
     build_operator,
     build_optimizer,
+    build_solve,
     clone_state,
     copy_state,
     evaluate,
@@ -59,6 +60,7 @@ def train_model(config, *, y_train, y_val, q_train=None, q_val=None):
     y_train, y_val, q_train, q_val = prepare_data(config, operator, y_train, y_val, q_train, q_val)
     model = build_model(config)
     objective = build_loss(config)
+    solve = build_solve(config, model)
     if isinstance(model, NeuralAugmentation):
         model.init_normalizers(y_train[: config.batch_size], operator)
     batches = iterate_batches(config, y_train.shape[0])
@@ -74,7 +76,7 @@ def train_model(config, *, y_train, y_val, q_train=None, q_val=None):
             indices = next(batches)
             y_batch = y_train[indices]
             q_batch = q_train[indices] if config.supervised else None
-            loss = objective(model, y_batch, q_batch, stage, operator, column_norms)
+            loss = objective(solve, y_batch, q_batch, stage, operator, column_norms)
             loss.backward()
             if config.grad_clip_norm is not None:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip_norm)
@@ -82,7 +84,7 @@ def train_model(config, *, y_train, y_val, q_train=None, q_val=None):
 
             if step % config.val_every != 0 and step != config.steps_per_stage:
                 continue
-            val_loss = evaluate(objective, model, y_val, q_val, operator, column_norms, stage)
+            val_loss = evaluate(objective, solve, y_val, q_val, operator, column_norms, stage)
             if val_loss < stage_best_val_loss:
                 stage_best_val_loss = val_loss
                 copy_state(best_state, model)

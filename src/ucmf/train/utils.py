@@ -5,6 +5,7 @@ import warnings
 import ucmf
 
 from ..optim import operator as operator_module
+from ..optim.compile import all_iterates, compile_unrolled
 from ..scaling import lambda_max
 
 import ray.tune
@@ -33,12 +34,14 @@ def iterate_batches(config, num_samples):
     """Endless minibatch indices on the configured device, without replacement per epoch.
 
     Every epoch draws a fresh permutation (seeded by ``config.seed``) and splits it into
-    batches of ``config.batch_size``; the last batch of an epoch may be smaller.
+    full batches of ``config.batch_size``; the remaining ``num_samples % batch_size``
+    indices are dropped, so all batches share one shape (one compiled graph).
     """
     generator = torch.Generator(device=config.torch_device).manual_seed(config.seed)
+    num_batches = num_samples // config.batch_size
     while True:
         permutation = torch.randperm(num_samples, generator=generator, device=config.torch_device)
-        yield from permutation.split(config.batch_size)
+        yield from permutation[: num_batches * config.batch_size].view(num_batches, config.batch_size)
 
 
 def build_operator(config):
@@ -57,10 +60,22 @@ def build_optimizer(config, model):
     return torch.optim.Adam(model.parameters(), lr=config.learning_rate)
 
 
-def evaluate(objective, model, y, q, operator, column_norms, stage):
-    """No-grad ``objective`` of the model at solver depth ``stage`` on ``(y, q)``."""
+def build_solve(config, model):
+    """Return ``solve(y, operator, t)`` giving the iterates ``(t, B, n)`` of ``model``.
+
+    With ``config.compile``, one graph of depth ``config.stages`` serves all stages;
+    stage ``t`` takes its first ``t`` iterates.
+    """
+    if config.compile:
+        compiled = compile_unrolled(model, config.stages)
+        return lambda y, operator, t: compiled(y, operator=operator)[:t]
+    return lambda y, operator, t: all_iterates(model, y, t, operator=operator)
+
+
+def evaluate(objective, solve, y, q, operator, column_norms, stage):
+    """No-grad ``objective`` at solver depth ``stage`` on ``(y, q)``."""
     with torch.no_grad():
-        return objective(model, y, q, stage, operator, column_norms).item()
+        return objective(solve, y, q, stage, operator, column_norms).item()
 
 
 def prepare_data(config, operator, y_train, y_val, q_train, q_val):
@@ -77,11 +92,14 @@ def prepare_data(config, operator, y_train, y_val, q_train, q_val):
     Raises
     ------
     ValueError
-        If ``y_train``/``y_val`` are not 2D, a supervised loss misses targets, or the
-        operator does not match the configured dtype and device.
+        If ``y_train``/``y_val`` are not 2D, ``y_train`` has fewer samples than one batch,
+        a supervised loss misses targets, or the operator does not match the configured
+        dtype and device.
     """
     if y_train.ndim != 2 or y_val.ndim != 2:
         raise ValueError(f'y_train and y_val must be 2D, got {tuple(y_train.shape)} and {tuple(y_val.shape)}.')
+    if y_train.shape[0] < config.batch_size:
+        raise ValueError(f'y_train has {y_train.shape[0]} samples, fewer than batch_size={config.batch_size}.')
     if config.supervised and (q_train is None or q_val is None):
         raise ValueError(f'loss {config.loss!r} requires q_train and q_val.')
     y_train, y_val, q_train, q_val = (
