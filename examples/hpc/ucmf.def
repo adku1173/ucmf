@@ -5,8 +5,8 @@ From: python:3.13-slim-bookworm
     Description "ucmf runtime (torch 2.12, CUDA 12.6: Tesla P100 sm_60 and A100 sm_80); ucmf is bound at /opt/ucmf"
 
 %post
-    # Triton (torch.compile on CUDA) builds its launcher with a C compiler.
-    apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
+    # Triton (torch.compile on CUDA) builds its launcher with a C compiler; git records the code state.
+    apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev git && rm -rf /var/lib/apt/lists/*
     pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu126 torch==2.12.0
     pip install --no-cache-dir numpy "ray[tune]>=2.60"
 
