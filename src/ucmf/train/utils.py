@@ -101,8 +101,14 @@ def build_operator(config):
 
 
 def build_model(config):
-    """Build the solver named by ``config.model_name`` on the configured device and precision."""
-    model = getattr(ucmf, config.model_name)(**config.model_kwargs)
+    """Build the solver named by ``config.model_name`` on the configured device and precision.
+
+    The random initialization (e.g. the LSTM of NA models) is seeded by ``config.seed``. It runs
+    on the CPU in a forked RNG, so the caller's global RNG stays untouched.
+    """
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(config.seed)
+        model = getattr(ucmf, config.model_name)(**config.model_kwargs)
     return model.to(dtype=config.torch_dtype, device=config.torch_device)
 
 

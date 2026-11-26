@@ -7,6 +7,7 @@ collected in the returned :class:`~ucmf.train.result.TrainingResult`.
 """
 
 from functools import partial
+from time import perf_counter
 
 from ..optim.neural_augmentation import NeuralAugmentation
 from ..scaling import normalize_operator
@@ -43,7 +44,11 @@ def train_model(config, *, y_train, y_val, q_train=None, q_val=None, index_train
     ``config.val_every`` steps and at the end of each stage, one metrics dict is
     reported to Ray and appended to the history. With ``q_val``, it also holds
     ``val_nmse``, the validation NMSE of the final iterate for any loss; checkpoint
-    selection still uses ``val_loss``.
+    selection still uses ``val_loss``. ``train_seconds`` times the steps since the previous
+    point (including bookkeeping such as stage changes), ``val_seconds`` the validation
+    (including ``val_nmse``). The existing syncs ``loss.item()`` and the validation's
+    ``.item()`` bound both, so no extra sync is added; compilation shows up in the first
+    ``train_seconds`` (training graph) and the first ``val_seconds`` (no-grad graph).
 
     Parameters
     ----------
@@ -81,6 +86,7 @@ def train_model(config, *, y_train, y_val, q_train=None, q_val=None, index_train
     batches = iterate_batches(config, y_train.shape[0], index_train)
     best_state = clone_state(model)
     history = []
+    last = perf_counter()
 
     for stage in range(1, config.stages + 1):
         optimizer = build_optimizer(config, model)
@@ -99,21 +105,25 @@ def train_model(config, *, y_train, y_val, q_train=None, q_val=None, index_train
 
             if step % config.val_every != 0 and step != config.steps_per_stage:
                 continue
+            train_loss = loss.item()  # syncs the GPU, so train_seconds covers the computed steps
+            train_seconds, last = perf_counter() - last, perf_counter()
             val_loss = evaluate(objective, solve, val_batches, operator, column_norms, stage)
-            if val_loss < stage_best_val_loss:
-                stage_best_val_loss = val_loss
-                copy_state(best_state, model)
             metrics = {
                 'stage': stage,
                 'step': (stage - 1) * config.steps_per_stage + step,
-                'train_loss': loss.item(),
+                'train_loss': train_loss,
                 'val_loss': val_loss,
-                'stage_best_val_loss': stage_best_val_loss,
             }
             if q_val is not None:
                 metrics['val_nmse'] = evaluate(val_nmse, solve, val_batches, operator, column_norms, stage)
+            metrics['train_seconds'], metrics['val_seconds'] = train_seconds, perf_counter() - last
+            if val_loss < stage_best_val_loss:
+                stage_best_val_loss = val_loss
+                copy_state(best_state, model)
+            metrics['stage_best_val_loss'] = stage_best_val_loss
             history.append(metrics)
             ray_report(metrics)
+            last = perf_counter()  # bookkeeping counts toward the next train_seconds
         model.load_state_dict(best_state)
 
     return TrainingResult(

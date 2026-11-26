@@ -5,7 +5,7 @@ import pytest
 pytest.importorskip('ray')
 
 from ucmf.train import TrainingResult, train_model  # noqa: E402
-from ucmf.train.utils import iterate_batches  # noqa: E402
+from ucmf.train.utils import build_model, iterate_batches  # noqa: E402
 
 from configs import training_config  # noqa: E402
 
@@ -40,8 +40,14 @@ def test_history_matches_reported_metrics(problem):
     result = run(problem)
     assert isinstance(result, TrainingResult)
     assert [entry['step'] for entry in result.history] == list(range(1, STAGES * STEPS + 1))
-    assert set(result.history[0]) == {'stage', 'step', 'train_loss', 'val_loss', 'stage_best_val_loss', 'val_nmse'}
+    losses = {'train_loss', 'val_loss', 'stage_best_val_loss', 'val_nmse'}
+    assert set(result.history[0]) == {'stage', 'step', 'train_seconds', 'val_seconds'} | losses
     assert set(result.state_dict) == {'B', '_gamma', '_theta'}
+
+
+def test_validation_points_time_training_and_validation(problem):
+    for entry in run(problem).history:
+        assert 0 < entry['train_seconds'] < 60 and 0 < entry['val_seconds'] < 60
 
 
 def test_best_val_loss_belongs_to_last_stage(problem):
@@ -144,6 +150,16 @@ def test_invalid_config_rejected(problem):
 def test_operator_must_match_config_precision(problem):
     with pytest.raises(ValueError, match='operator must have dtype'):
         run(problem, precision='float32')
+
+
+def test_model_initialization_is_seeded_without_touching_the_global_rng(problem):
+    model_kwargs = {'gamma_init': 0.3, 'theta_init': 0.01, 'lstm_dim': 5, 'num_measurements': M}
+    configs = [make_config(problem[0], model_name='NA_AdaLFISTASW', model_kwargs=model_kwargs, seed=s) for s in (0, 1)]
+    global_state = torch.random.get_rng_state()
+    first, second, other = (build_model(config).state_dict() for config in (configs[0], configs[0], configs[1]))
+    assert torch.equal(torch.random.get_rng_state(), global_state)
+    torch.testing.assert_close(first, second, rtol=0, atol=0, equal_nan=True)  # normalizers: NaN until init
+    assert not torch.equal(first['controller.lstm.weight_ih'], other['controller.lstm.weight_ih'])
 
 
 def test_na_model_initializes_normalizers(problem):
