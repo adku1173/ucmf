@@ -93,7 +93,9 @@ def make_propagation_weight_operator(operator, Br_re, Br_im):
     Parameters
     ----------
     operator : CMFDictionary or CMFPropagation
-        Detached measurement operator ``A``; its ``mics`` select ``Br[mics, mics]``.
+        Detached measurement operator ``A``; its ``mics`` select ``Br[mics, mics]``, its
+        ``hvec_rows`` the principal submatrix ``B[hvec_rows, hvec_rows]`` (zero-filled
+        rows, as ``B[rows, rows]`` of a dense weight).
     Br_re, Br_im : Tensor
         Real and imaginary parts of the full ``(c, c)`` auxiliary propagation matrix.
 
@@ -108,7 +110,7 @@ def make_propagation_weight_operator(operator, Br_re, Br_im):
     mics = operator.mics
     if mics is not None:
         Br = Br[mics.unsqueeze(-1), mics.unsqueeze(-2)]
-    return _AuxiliaryOperator(operator, _AuxiliaryPropagationOperator(Br, operator.hvec))
+    return _AuxiliaryOperator(operator, _AuxiliaryPropagationOperator(Br, operator.hvec, operator.hvec_rows))
 
 
 def apply_auxiliary_weight(B, A_tensor):

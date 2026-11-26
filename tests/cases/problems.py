@@ -2,7 +2,8 @@
 
 The operator source (``H`` or the matrix) requires gradients, so tests can check
 that models detach it.
-Tags: ``cmf``, ``dictionary`` (``CMFDictionary``), ``rows`` (``MatrixMult`` row subsets).
+Tags: ``cmf``, ``dictionary`` (``CMFDictionary``, also its row subsets), ``rows`` (``MatrixMult``
+row subsets).
 """
 
 from ucmf.optim.operator import CMFDictionary, CMFPropagation, MatrixMult
@@ -13,6 +14,8 @@ from pytest_cases import case, parametrize
 NUM_MICS = 4
 NUM_SOURCES = 3
 BATCH = 2
+
+
 def cmf_problem(dtype=torch.float64):
     """Small problem every model accepts; ``H`` requires gradients."""
     rng = torch.Generator().manual_seed(3)
@@ -56,6 +59,19 @@ class ProblemCases:
     @R_DIAG
     def case_dictionary(self, batched_H, mics, r_diag):
         return _cmf_problem(CMFDictionary, batched_H, mics, r_diag)
+
+    @case(tags=('cmf', 'dictionary'))
+    @parametrize('mics', [None, [0, 2, 3]], ids=['all-mics', 'mic-subset'])
+    @parametrize('rows', [[0, 2, 3, 5], [[0, 2, 3, 5], [1, 2, 4, 5]]], ids=['shared-rows', 'per-problem-rows'])
+    @R_DIAG
+    def case_dictionary_rows(self, mics, rows, r_diag):
+        """Row subset of a CMF dictionary, e.g. a CV train subset; reduced models use ``B[rows, rows]``."""
+        rng = torch.Generator().manual_seed(13)
+        H = torch.randn(NUM_MICS, NUM_SOURCES, dtype=torch.complex128, generator=rng).requires_grad_()
+        operator = CMFDictionary(H, r_diag=r_diag)
+        if mics is not None:
+            operator = operator.select_mics(torch.tensor(mics))
+        return _with_data(operator.select_rows(torch.tensor(rows)), rng)
 
     @case(tags='cmf')
     @CMF_LAYOUTS

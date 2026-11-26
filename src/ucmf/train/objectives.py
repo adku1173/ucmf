@@ -24,7 +24,8 @@ def split_rows(operator, y, train_ratio, generator):
     """CV split of the scalar rows per problem; real and imaginary parts are independent.
 
     Returns ``(op_t, train_rows, val_rows)`` with local row indices of shape ``(B, k)``;
-    ``op_t`` needs ``select_rows`` (a dense operator).
+    ``op_t`` needs ``select_rows`` (a dense operator). A ``CMFDictionary`` keeps its CMF
+    coordinates, so the reduced models act on the principal submatrix of their weight.
     """
     train, val = _partition(torch.arange(y.shape[-1], device=y.device), y.shape[0], train_ratio, generator)
     train, val = train.sort(dim=-1).values, val.sort(dim=-1).values

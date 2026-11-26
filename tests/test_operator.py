@@ -10,6 +10,7 @@ from ucmf.optim.operator import (
     _AuxiliaryPropagationOperator,
 )
 from ucmf.optim.utils import default_gamma_from_operator
+from ucmf.optim.weights import make_propagation_weight_operator
 
 from cases.models import ModelCases, build_model
 from cases.operators import BATCH_SIZE, OperatorCases, cmf_matrix
@@ -170,7 +171,7 @@ def test_select_mics_matches_subarray_and_original_rows(operator, matrix, mics):
 @parametrize_with_cases(OPERATOR, cases=OperatorCases, has_tag='rows')
 def test_select_rows_matches_row_subset_and_keeps_original_indices(operator, matrix, rows):
     sub = operator.select_rows(rows)
-    assert type(sub) is MatrixMult
+    assert type(sub) is type(operator)  # a CMFDictionary keeps its CMF coordinates
     assert_matches_on_random_inputs(sub, per_problem(matrix, rows, dim=0))
     torch.testing.assert_close(sub.rows, rows)
 
@@ -180,6 +181,27 @@ def test_select_rows_matches_row_subset_and_keeps_original_indices(operator, mat
     torch.testing.assert_close(nested.rows, original)
     assert_matches_on_random_inputs(nested, per_problem(matrix, original, dim=0))
     torch.testing.assert_close(nested.select_columns(torch.tensor([0, 2])).rows, original)
+    if isinstance(operator, CMFDictionary):  # all microphones: the hvec rows are the original rows
+        torch.testing.assert_close(nested.select_columns(torch.tensor([0, 2])).hvec_rows, original)
+        torch.testing.assert_close(nested.scale_columns(matrix.new_ones(4)).detached().hvec_rows, original)
+
+
+@pytest.mark.parametrize(
+    'rows', [torch.tensor([5, 0, 2, 3]), torch.tensor([[0, 2, 5], [1, 2, 4], [4, 0, 1]])], ids=['shared', 'per-problem']
+)
+@pytest.mark.parametrize('mics', [None, torch.tensor([0, 2, 3, 4])], ids=['all-mics', 'mic-subset'])
+@pytest.mark.parametrize('r_diag', [False, True], ids=['full', 'off-diagonal'])
+def test_reduced_weight_of_row_subset_is_principal_submatrix(rows, mics, r_diag):
+    rng = torch.Generator().manual_seed(5)
+    H = torch.randn(5, 4, dtype=torch.complex128, generator=rng)
+    Br = torch.randn(5, 5, dtype=torch.complex128, generator=rng)
+    operator = CMFDictionary(H, r_diag=r_diag)
+    operator = operator if mics is None else operator.select_mics(mics)
+    weight = make_propagation_weight_operator(operator, Br.real, Br.imag).weight
+    B = weight.forward(torch.eye(operator.shape[0], dtype=torch.float64)).mT  # dense B on the active block
+    subset = operator.select_rows(rows)
+    expected = B[rows.unsqueeze(-1), rows.unsqueeze(-2)] @ subset.matrix
+    assert_matches_on_random_inputs(make_propagation_weight_operator(subset, Br.real, Br.imag), expected)
 
 
 @pytest.mark.parametrize('operator_type', [CMFDictionary, CMFPropagation])

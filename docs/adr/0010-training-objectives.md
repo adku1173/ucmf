@@ -44,7 +44,11 @@ measurements, so it cannot be a function of the full-batch output.
    | `mics` | microphones, val block only | yes | 64 / 4 / 32 % | CMF |
    | `mics_cross` | microphones, val incl. cross terms | yes | 64 / 36 / 0 % | CMF |
 
-   For the microphone splits, `train_ratio` refers to microphones.
+   For the microphone splits, `train_ratio` refers to microphones. On a row subset `P`
+   (`rows`, `complex_rows`), the dense weights use `B[rows, rows]`; the reduced models
+   (R, SWR) use the same principal submatrix of their congruence,
+   `P hvec(Br hvec*(P^T v) Br^H)`: zero-fill the other rows, apply the congruence, keep the
+   train rows. `CMFDictionary.select_rows` therefore keeps its CMF coordinates (`hvec_rows`).
 5. Training compiles by default (`compile=True`): `compile_unrolled(model, stages)`
    computes all `stages` iterations once per batch; stage `t` enters the graph as a tensor,
    and the iterations after `t` keep `x_t` (`active_iterations`), so one graph serves all

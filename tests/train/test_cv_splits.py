@@ -123,6 +123,18 @@ def test_cv_trains_with_every_split(split):
     assert len(result.history) == 4 and torch.isfinite(torch.tensor(result.best_val_loss))
 
 
+@pytest.mark.parametrize('model', [('AdaLFISTAR', {'num_iterations': 2}), ('NA_AdaLFISTASWR', {})], ids=lambda m: m[0])
+@pytest.mark.parametrize('split', ['rows', 'complex_rows'])
+def test_cv_row_splits_train_reduced_models(split, model):
+    """Reduced weights act on the principal submatrix of the train rows (ADR 0010)."""
+    model_name, size = model
+    model_kwargs = {'num_mics': C, 'gamma_init': 0.3, 'theta_init': 0.01, **size}
+    config = cv_config(model_name=model_name, model_kwargs=model_kwargs, loss_kwargs={'split': split}, w=0.5)
+    y = CMFDictionary(config.operator_kwargs['H']).forward(torch.rand(2 * B, 4, dtype=torch.float64))
+    result = train_model(config, y_train=y, y_val=y[:B])
+    assert len(result.history) == 4 and torch.isfinite(torch.tensor(result.best_val_loss))
+
+
 def test_cv_config_rejects_invalid_split_and_signed_models():
     with pytest.raises(ValueError, match='split must be one of'):
         cv_config(loss_kwargs={'split': 'nope'})

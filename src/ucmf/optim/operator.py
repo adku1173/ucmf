@@ -416,21 +416,29 @@ class _AuxiliaryPropagationOperator(LinearOperator):
     ``Br`` is complex, shared ``(c, c)`` or per problem ``(B, c, c)``;
     ``hvec`` must match its microphone dimensions and device. For a reduced
     vectorization, ``hvec*`` zero-fills the diagonal before the congruence,
-    and ``hvec`` discards it again after the congruence.
+    and ``hvec`` discards it again after the congruence. Likewise, ``hvec_rows``
+    (rows of ``hvec``, shared ``(k,)`` or per problem ``(B, k)``) restricts the
+    operator to the principal submatrix ``B[hvec_rows, hvec_rows]``: the other
+    rows are zero-filled before and discarded after the congruence.
     """
 
-    def __init__(self, Br, hvec):
-        self.Br, self.hvec = Br, hvec
-        m = hvec.num_measurements
+    def __init__(self, Br, hvec, hvec_rows=None):
+        self.Br, self.hvec, self.hvec_rows = Br, hvec, hvec_rows
+        m = hvec.num_measurements if hvec_rows is None else hvec_rows.shape[-1]
         self.shape = (m, m)
         self.dtype, self.device = Br.real.dtype, Br.device
-        self.batch_size = Br.shape[0] if Br.ndim == 3 else None
+        batched = Br if Br.ndim == 3 else hvec_rows if hvec_rows is not None and hvec_rows.ndim == 2 else None
+        self.batch_size = None if batched is None else batched.shape[0]
         self.rows = None
 
     def _apply(self, vector, Br):
+        if self.hvec_rows is not None:
+            index = self.hvec_rows.expand_as(vector)
+            vector = vector.new_zeros(*vector.shape[:-1], self.hvec.num_measurements).scatter(-1, index, vector)
         csm = torch.complex(*self.hvec.adjoint(vector))
         transformed = Br @ csm @ Br.mH
-        return self.hvec(transformed.real, transformed.imag)
+        result = self.hvec(transformed.real, transformed.imag)
+        return result if self.hvec_rows is None else result.gather(-1, index)
 
     def forward(self, x):
         return self._apply(x, self.Br)
@@ -439,7 +447,7 @@ class _AuxiliaryPropagationOperator(LinearOperator):
         return self._apply(r, self.Br.mH)
 
     def detached(self):
-        return _AuxiliaryPropagationOperator(self.Br.detach(), self.hvec)
+        return _AuxiliaryPropagationOperator(self.Br.detach(), self.hvec, self.hvec_rows)
 
 
 class CMFPropagation(LinearOperator):
@@ -461,7 +469,11 @@ class CMFPropagation(LinearOperator):
         Vectorization of the active microphones.
     mics : Tensor or None
         Indices of the active microphones in the full array; None for all.
+    hvec_rows : None
+        Always None: all rows of ``hvec`` are active (see :class:`CMFDictionary`).
     """
+
+    hvec_rows = None
 
     def __init__(self, H, r_diag=False):
         if not torch.is_tensor(H) or not H.is_complex() or H.ndim not in (2, 3):
@@ -602,8 +614,8 @@ class CMFPropagation(LinearOperator):
 class CMFDictionary(MatrixMult):
     """Explicit CMF dictionary with columns ``hvec(h_j h_j^H)``.
 
-    Microphone and source selection preserve the CMF representation. Arbitrary
-    row selection returns a ``MatrixMult`` with the original row indices.
+    Microphone, source and row selection preserve the CMF representation. After
+    a row selection, ``hvec_rows`` locates the active rows in ``hvec``.
 
     Parameters
     ----------
@@ -620,12 +632,15 @@ class CMFDictionary(MatrixMult):
         Vectorization of the active microphones.
     mics : Tensor or None
         Indices of the active microphones in the full array; None for all.
+    hvec_rows : Tensor or None
+        Active rows in ``hvec`` after :meth:`select_rows`, shared ``(k,)`` or per problem
+        ``(B, k)``; None for all rows.
     """
 
     def __init__(self, H, r_diag=False):
         self._init_from_propagation(CMFPropagation(H, r_diag=r_diag))
 
-    def _init_from_propagation(self, propagation, matrix=None):
+    def _init_from_propagation(self, propagation, matrix=None, hvec_rows=None):
         self._propagation = propagation
         self.H, self.hvec, self.r_diag = propagation.H, propagation.hvec, propagation.r_diag
         self.mics = propagation.mics
@@ -636,19 +651,40 @@ class CMFDictionary(MatrixMult):
             imag = (H[..., hvec.imag_i, :] * H[..., hvec.imag_j, :].conj()).imag
             entries = torch.cat((real, imag), dim=-2)
             matrix = entries * hvec.row_weights(entries).unsqueeze(-1)
-        super().__init__(matrix, rows=propagation.rows)
+        rows = propagation.rows if hvec_rows is None else propagation._subset_rows(hvec_rows)
+        super().__init__(matrix, rows=rows)
+        self.hvec_rows = hvec_rows
         self._num_measurements_total = propagation._num_measurements_total
         self._num_mics_total = propagation._num_mics_total
 
-    def _derived(self, propagation, matrix=None):
-        # Skip __init__: the propagation operator already carries the selected rows and microphones.
+    def _derived(self, propagation, matrix=None, hvec_rows=None):
+        # Skip __init__: the propagation operator already carries the selected microphones.
         op = CMFDictionary.__new__(CMFDictionary)
-        op._init_from_propagation(propagation, matrix)
+        op._init_from_propagation(propagation, matrix, hvec_rows)
         return op
 
     def detached(self):
         """Detach both ``H`` and the cached dictionary without rebuilding it."""
-        return self._derived(self._propagation.detached(), self.matrix.detach())
+        return self._derived(self._propagation.detached(), self.matrix.detach(), self.hvec_rows)
+
+    def select_rows(self, index):
+        """Select measurement rows; the result stays a CMF dictionary.
+
+        See :meth:`MatrixMult.select_rows`. ``hvec_rows`` keeps the rows in ``hvec``, so that
+        reduced weights act on the principal submatrix of their congruence (see
+        :func:`~ucmf.optim.weights.make_propagation_weight_operator`). Precondition: no
+        :meth:`select_mics` on the result.
+
+        Returns
+        -------
+        CMFDictionary
+            Dictionary of the selected rows.
+        """
+        index = _validate_index(index, 'row index', self.device, self.batch_size)
+        matrix = _take(self.matrix, index, self.matrix.ndim - 2, self.batch_size is not None)
+        hvec_rows = self.hvec_rows
+        hvec_rows = index if hvec_rows is None else _take(hvec_rows, index, hvec_rows.ndim - 1, hvec_rows.ndim == 2)
+        return self._derived(self._propagation, matrix, hvec_rows)
 
     def select_columns(self, index):
         """Select sources from both ``H`` and the stored dictionary.
@@ -666,11 +702,12 @@ class CMFDictionary(MatrixMult):
         propagation = self._propagation.select_columns(index)
         # MatrixMult selects the same columns from the cached dictionary. Reuse its
         # matrix so the new CMFDictionary need not rebuild it from the selected H.
-        return self._derived(propagation, super().select_columns(index).matrix)
+        return self._derived(propagation, super().select_columns(index).matrix, self.hvec_rows)
 
     def scale_columns(self, scale):
         """Scale ``H`` and the cached dictionary, see :meth:`CMFPropagation.scale_columns`."""
-        return self._derived(self._propagation.scale_columns(scale), super().scale_columns(scale).matrix)
+        matrix = super().scale_columns(scale).matrix
+        return self._derived(self._propagation.scale_columns(scale), matrix, self.hvec_rows)
 
     def select_mics(self, index):
         """Build the dictionary of the selected microphone block.
@@ -694,7 +731,7 @@ class CMFDictionary(MatrixMult):
 
         See :meth:`MatrixMult.select_problems`.
         """
-        return self._derived(self._propagation.select_problems(index), self.matrix[index])
+        return self._derived(self._propagation.select_problems(index), self.matrix[index], self.hvec_rows)
 
     def mic_rows(self, index):
         """Return the rows of a microphone block without building its dictionary.
