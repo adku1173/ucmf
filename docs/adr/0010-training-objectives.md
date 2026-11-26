@@ -46,8 +46,10 @@ measurements, so it cannot be a function of the full-batch output.
 
    For the microphone splits, `train_ratio` refers to microphones.
 5. Training compiles by default (`compile=True`): `compile_unrolled(model, stages)`
-   computes all `stages` iterations once per batch and stage `t` takes `out[:t]`, so `t`
-   never enters the graph. Batches are full (`drop_last`), so the shapes stay fixed.
+   computes all `stages` iterations once per batch; stage `t` enters the graph as a tensor,
+   and the iterations after `t` keep `x_t` (`active_iterations`), so one graph serves all
+   stages without overflowing into the gradient. Batches are full (`drop_last`), so the
+   shapes stay fixed.
 
 ## Consequences
 

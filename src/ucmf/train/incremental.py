@@ -47,8 +47,13 @@ def train_model(config, *, y_train, y_val, q_train=None, q_val=None, index_train
     selection still uses ``val_loss``. ``train_seconds`` times the steps since the previous
     point (including bookkeeping such as stage changes), ``val_seconds`` the validation
     (including ``val_nmse``). The existing syncs ``loss.item()`` and the validation's
-    ``.item()`` bound both, so no extra sync is added; compilation shows up in the first
-    ``train_seconds`` (training graph) and the first ``val_seconds`` (no-grad graph).
+    ``.item()`` bound both; compilation shows up in the first ``train_seconds`` (training
+    graph) and the first ``val_seconds`` (no-grad graph).
+
+    A step with a non-finite loss or gradient norm is rejected (as in FA2026): the model
+    returns to the stage's best state so far and Adam restarts with fresh moments, the
+    learning rate unchanged. ``rejected_steps`` in the history counts them since the
+    previous point. The check syncs the GPU once per step.
 
     Parameters
     ----------
@@ -86,6 +91,7 @@ def train_model(config, *, y_train, y_val, q_train=None, q_val=None, index_train
     batches = iterate_batches(config, y_train.shape[0], index_train)
     best_state = clone_state(model)
     history = []
+    rejected_steps = 0
     last = perf_counter()
 
     for stage in range(1, config.stages + 1):
@@ -99,9 +105,16 @@ def train_model(config, *, y_train, y_val, q_train=None, q_val=None, index_train
             batch_op, batch_norms = batch_operator(operator, column_norms, problems)
             loss = objective(solve, y_train[samples], q_batch, stage, batch_op, batch_norms)
             loss.backward()
-            if config.grad_clip_norm is not None:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip_norm)
-            optimizer.step()
+            parameters = [parameter for parameter in model.parameters() if parameter.grad is not None]
+            grad_norm = torch.nn.utils.get_total_norm([parameter.grad for parameter in parameters])
+            if torch.isfinite(loss) & torch.isfinite(grad_norm):  # the per-step sync
+                if config.grad_clip_norm is not None:
+                    torch.nn.utils.clip_grads_with_norm_(parameters, config.grad_clip_norm, grad_norm)
+                optimizer.step()
+            else:  # reject: back to the stage's best state, Adam without the corrupt moments
+                model.load_state_dict(best_state)
+                optimizer = build_optimizer(config, model)
+                rejected_steps += 1
 
             if step % config.val_every != 0 and step != config.steps_per_stage:
                 continue
@@ -113,7 +126,9 @@ def train_model(config, *, y_train, y_val, q_train=None, q_val=None, index_train
                 'step': (stage - 1) * config.steps_per_stage + step,
                 'train_loss': train_loss,
                 'val_loss': val_loss,
+                'rejected_steps': rejected_steps,
             }
+            rejected_steps = 0
             if q_val is not None:
                 metrics['val_nmse'] = evaluate(val_nmse, solve, val_batches, operator, column_norms, stage)
             metrics['train_seconds'], metrics['val_seconds'] = train_seconds, perf_counter() - last

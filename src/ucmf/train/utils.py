@@ -121,11 +121,11 @@ def build_solve(config, model):
     """Return ``solve(y, operator, t)`` giving the iterates ``(t, B, n)`` of ``model``.
 
     With ``config.compile``, one graph of depth ``config.stages`` serves all stages;
-    stage ``t`` takes its first ``t`` iterates.
+    in stage ``t`` the later iterations keep ``x_t``.
     """
     if config.compile:
         compiled = compile_unrolled(model, config.stages)
-        return lambda y, operator, t: compiled(y, operator=operator)[:t]
+        return lambda y, operator, t: compiled(y, t, operator=operator)
     return lambda y, operator, t: all_iterates(model, y, t, operator=operator)
 
 

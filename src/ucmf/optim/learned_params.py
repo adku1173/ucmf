@@ -51,7 +51,7 @@ class LearnedParams:
         """Per-iteration soft-thresholds actually applied (``softplus(_theta)``)."""
         return F.softplus(self._theta)
 
-    def forward(self, y, x0=None, t=1, operator=None):
+    def forward(self, y, x0=None, t=1, operator=None, active_iterations=None):
         """Run ``t`` unfolded iterations with a fixed operator and the learned parameters.
 
         Inputs and model parameters must already share ``y``'s dtype and device.
@@ -68,6 +68,10 @@ class LearnedParams:
             Number of iterations, ``0 <= t <= num_iterations`` (default 1).
         operator : LinearOperator
             Measurement operator; treated as fixed.
+        active_iterations : Tensor, optional
+            0-d integer tensor ``s <= t``: iterations ``s + 1, ..., t`` keep the iterate, so the
+            result is ``x_s``. One compiled graph of depth ``t`` thus serves every depth ``s``,
+            see :func:`~ucmf.optim.compile.compile_unrolled`. Default: all ``t`` iterations.
 
         Returns
         -------
@@ -85,4 +89,5 @@ class LearnedParams:
             step_params_fn=lambda k: (gammas[k], thetas[k]),
             gradient=gradient,
             callback_metadata=callback_metadata,
+            active_iterations=active_iterations,
         )

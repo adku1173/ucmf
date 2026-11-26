@@ -177,10 +177,12 @@ Objectives: `nmse` (supervised), `lasso` (`lam`), `bic` (`alpha=1e-2`), and `cv`
 [ADR 0010](docs/adr/0010-training-objectives.md).
 
 Every validation point (`history`, Ray report) holds `stage`, `step`, `train_loss`, `val_loss`,
-`stage_best_val_loss`, `train_seconds` (steps since the previous point, including stage changes
-and the first compilation) and `val_seconds` (validation). Given `q_val`, it also holds
-`val_nmse`, the validation NMSE of the final iterate, for any objective; checkpoints are still
-selected by `val_loss`. `build_model` seeds the initialization by `config.seed`.
+`stage_best_val_loss`, `rejected_steps`, `train_seconds` (steps since the previous point, including
+stage changes and the first compilation) and `val_seconds` (validation). Given `q_val`, it also
+holds `val_nmse`, the validation NMSE of the final iterate, for any objective; checkpoints are
+still selected by `val_loss`. A step with a non-finite loss or gradient norm is rejected: the model
+returns to the stage's best state with fresh Adam moments; `rejected_steps` counts these since the
+previous point. `build_model` seeds the initialization by `config.seed`.
 
 ### Choosing the training configuration
 

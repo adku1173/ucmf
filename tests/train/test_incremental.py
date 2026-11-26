@@ -4,7 +4,7 @@ import pytest
 
 pytest.importorskip('ray')
 
-from ucmf.train import TrainingResult, train_model  # noqa: E402
+from ucmf.train import TrainingResult, incremental, train_model  # noqa: E402
 from ucmf.train.utils import build_model, iterate_batches  # noqa: E402
 
 from configs import training_config  # noqa: E402
@@ -41,7 +41,8 @@ def test_history_matches_reported_metrics(problem):
     assert isinstance(result, TrainingResult)
     assert [entry['step'] for entry in result.history] == list(range(1, STAGES * STEPS + 1))
     losses = {'train_loss', 'val_loss', 'stage_best_val_loss', 'val_nmse'}
-    assert set(result.history[0]) == {'stage', 'step', 'train_seconds', 'val_seconds'} | losses
+    timing = {'train_seconds', 'val_seconds'}
+    assert set(result.history[0]) == {'stage', 'step', 'rejected_steps'} | timing | losses
     assert set(result.state_dict) == {'B', '_gamma', '_theta'}
 
 
@@ -54,6 +55,46 @@ def test_best_val_loss_belongs_to_last_stage(problem):
     result = run(problem)
     last_stage = [entry['val_loss'] for entry in result.history if entry['stage'] == STAGES]
     assert result.best_val_loss == min(last_stage) == result.history[-1]['stage_best_val_loss']
+
+
+class _NanGradient(torch.autograd.Function):
+    """Identity in the forward pass, NaN gradient in the backward pass."""
+
+    @staticmethod
+    def forward(ctx, x):
+        return x.clone()
+
+    @staticmethod
+    def backward(ctx, grad):
+        return torch.full_like(grad, float('nan'))
+
+
+@pytest.mark.parametrize('fault', ['loss', 'gradient'])
+def test_nonfinite_step_is_rejected_and_restores_the_stage_best(problem, monkeypatch, fault):
+    """Training step 2 turns non-finite; it is rejected instead of corrupting the parameters."""
+    build_loss = incremental.build_loss
+    calls = []
+
+    def faulty_build_loss(config):
+        objective = build_loss(config)
+
+        def faulty(*args):
+            loss = objective(*args)
+            if torch.is_grad_enabled():  # training steps only, not the validation
+                calls.append(None)
+                if len(calls) == 2:
+                    return loss * float('nan') if fault == 'loss' else _NanGradient.apply(loss)
+            return loss
+
+        return faulty
+
+    monkeypatch.setattr(incremental, 'build_loss', faulty_build_loss)
+    result = run(problem)
+    assert [entry['rejected_steps'] for entry in result.history] == [0, 1, 0, 0, 0, 0]
+    # the rejected step leaves the best state of step 1, so its validation repeats step 1
+    assert result.history[1]['val_loss'] == result.history[0]['val_loss']
+    assert all(torch.isfinite(torch.tensor(entry['val_loss'])) for entry in result.history)
+    assert all(torch.isfinite(value).all() for value in result.state_dict.values())
 
 
 def test_batches_are_full_and_without_replacement_per_epoch():

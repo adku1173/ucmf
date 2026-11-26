@@ -35,14 +35,16 @@ def all_iterates(model, y, t, **forward_kwargs):
 
 
 def compile_unrolled(model, t_max, mode='reduce-overhead'):
-    """Return a compiled function giving all iterates ``x_1, ..., x_{t_max}``.
+    """Return a compiled function giving the iterates ``x_1, ..., x_t`` for any ``t <= t_max``.
 
     ``torch.compile`` unrolls the iteration loop, so every distinct ``t`` would
     otherwise be a separate graph and trigger a recompilation (e.g. in staged
     training with t = 1, 2, ..., T). Here the solver is compiled once for
-    ``t_max``; the result of ``t`` iterations is ``out[t - 1]``. Iterations
-    after ``t`` are still computed; they do not change ``x_t`` and contribute
-    zero gradient to it.
+    ``t_max``, and ``t`` enters the graph as a tensor (``active_iterations`` of the
+    model's ``forward``): iterations after ``t`` are still computed but keep
+    ``x_t``, so they contribute exactly zero gradient. Iterating on with the untrained
+    parameters of later iterations could overflow and turn the gradient into NaN
+    (``0 * inf``).
 
     The model is an input of the compiled graph, not a captured constant, so new
     instances of the same model type (e.g. in a hyperparameter search) reuse the
@@ -53,7 +55,7 @@ def compile_unrolled(model, t_max, mode='reduce-overhead'):
     Parameters
     ----------
     model : torch.nn.Module
-        Solver, e.g. ``AdaLFISTASW``. Its own callbacks must be compilable (no
+        Unfolded solver, e.g. ``AdaLFISTASW``. Its own callbacks must be compilable (no
         host syncs such as ``.item()``); they stay active.
     t_max : int
         Number of iterations of the compiled graph.
@@ -63,12 +65,18 @@ def compile_unrolled(model, t_max, mode='reduce-overhead'):
     Returns
     -------
     callable
-        ``f(y, **forward_kwargs)`` returning a tensor of shape ``(t_max, B, n)``;
-        ``forward_kwargs`` are passed to ``model.forward`` with ``t = t_max``.
+        ``f(y, t, **forward_kwargs)`` returning the iterates of shape ``(t, B, n)``;
+        ``forward_kwargs`` are passed to ``model.forward``.
     """
 
-    def unrolled(solver, y, **forward_kwargs):
-        return all_iterates(solver, y, t_max, **forward_kwargs)  # t_max stays a graph constant
+    def unrolled(solver, y, active_iterations, **forward_kwargs):
+        # t_max stays a graph constant, active_iterations is a graph input
+        return all_iterates(solver, y, t_max, active_iterations=active_iterations, **forward_kwargs)
 
     compiled = torch.compile(unrolled, mode=mode)
-    return lambda y, **forward_kwargs: compiled(model, y, **forward_kwargs)
+
+    def solve(y, t, **forward_kwargs):
+        active_iterations = torch.full((), t, device=y.device)  # a fill kernel, no host-to-device copy
+        return compiled(model, y, active_iterations, **forward_kwargs)[:t]
+
+    return solve

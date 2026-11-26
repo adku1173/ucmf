@@ -15,8 +15,9 @@ class TrainingResult:
         Configuration of the run.
     history : list of dict
         Every validation point exactly as reported to Ray: ``stage``, global ``step``,
-        ``train_loss``, ``val_loss``, ``stage_best_val_loss``, ``train_seconds`` (steps since
-        the previous point) and ``val_seconds`` (validation); with ``q_val`` also ``val_nmse``,
+        ``train_loss``, ``val_loss``, ``stage_best_val_loss``, ``rejected_steps`` (non-finite
+        steps since the previous point), ``train_seconds`` (steps since the previous point)
+        and ``val_seconds`` (validation); with ``q_val`` also ``val_nmse``,
         the validation NMSE of the final iterate for any loss.
     best_val_loss : float
         Best validation loss of the last stage, i.e. of the returned model.

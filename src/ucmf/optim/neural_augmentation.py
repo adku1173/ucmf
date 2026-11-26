@@ -107,7 +107,7 @@ class NeuralAugmentation:
         self.controller.feature_mean.copy_(features.mean(dim=0))
         self.controller.feature_std.copy_(features.std(dim=0, unbiased=False))
 
-    def forward(self, y, x0=None, t=1, operator=None):
+    def forward(self, y, x0=None, t=1, operator=None, active_iterations=None):
         """Run ``t`` accelerated iterations with controller-predicted step parameters.
 
         Parameters
@@ -120,6 +120,10 @@ class NeuralAugmentation:
             Number of iterations, ``t >= 0`` (default 1).
         operator : LinearOperator
             Measurement operator; treated as fixed.
+        active_iterations : Tensor, optional
+            0-d integer tensor ``s <= t``: iterations ``s + 1, ..., t`` keep the iterate, so the
+            result is ``x_s``. One compiled graph of depth ``t`` thus serves every depth ``s``,
+            see :func:`~ucmf.optim.compile.compile_unrolled`. Default: all ``t`` iterations.
 
         Returns
         -------
@@ -142,8 +146,9 @@ class NeuralAugmentation:
             residual, direction = residual_gradient(z)
             gamma_k, theta_k, hidden, cell = self.controller(residual, direction, hidden, cell)
             x_next = shrink_func(z + gamma_k * direction, theta_k)
-            tk, z = self._nesterov_momentum(tk, x, x_next)
-            x = x_next
+            tk, z_next = self._nesterov_momentum(tk, x, x_next)
+            x = self._keep_inactive(k, active_iterations, x_next, x)
+            z = self._keep_inactive(k, active_iterations, z_next, z)
             if not self._on_iteration_end(x, gamma_k, theta_k, **callback_metadata):
                 break
         return x

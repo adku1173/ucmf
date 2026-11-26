@@ -63,8 +63,10 @@ A → normalize_operator → (D = A U^-1, u) → solver(y, operator=D) → x →
 
 ## Compilation
 
-`compile_unrolled(model, t_max)` compiles once and returns all iterates `(t_max, B, n)`;
-stage `t` uses `out[t - 1]`. All models compile to one graph without host syncs.
+`compile_unrolled(model, t_max)` compiles once and returns the iterates `(t, B, n)` for any
+`t <= t_max`: `t` enters the graph as a tensor (`active_iterations`), and iterations after `t`
+keep `x_t`, so their untrained parameters cannot overflow into the gradient (`0 * inf = NaN`).
+All models compile to one graph without host syncs.
 `all_iterates(model, y, t)` is the eager counterpart.
 Measured for Ada-LFISTA-SW (m = n = b = 256, T = 60, RTX 3090, CUDA graphs): the step time
 is independent of `t` (4.9 ms shared A, 18 ms per-sample CV vs. 3–59 ms eager), about
@@ -82,7 +84,7 @@ train_model: normalize_operator → prepare_data (train, val; equireg) → build
 
 - One function per objective in `OBJECTIVES` (`nmse`, `lasso`, `bic`, `cv`); `build_loss`
   binds `loss_kwargs`, `w`, and the CV generator ([0010](adr/0010-training-objectives.md)).
-- `build_solve` uses `compile_unrolled(model, stages)[:t]` (`compile=True`) or `all_iterates`.
+- `build_solve` uses `compile_unrolled(model, stages)` (`compile=True`) or `all_iterates`.
 - CV splits `rows`, `complex_rows`, `mics`, `mics_cross` return `(op_t, train_rows, val_rows)`.
 - Dictionary bank ([0011](adr/0011-dictionary-banks.md)): a per-problem operator of `K`
   entries plus `index_train`/`index_val`; `select_problems` picks a batch's entries.

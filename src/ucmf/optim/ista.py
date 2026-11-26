@@ -291,7 +291,18 @@ class FISTA(ISTA):
         z_next = x_next + (tk - 1.0) / t_next * (x_next - x)
         return t_next, z_next
 
-    def _iterate_accelerated(self, y, x0, t, step_params_fn, *, gradient, callback_metadata):
+    @staticmethod
+    def _keep_inactive(k, active_iterations, new, old):
+        """Return ``new``, or ``old`` in the identity iterations ``k >= active_iterations``.
+
+        A kept state is finite, so the discarded step contributes exactly zero gradient; iterating
+        on instead could overflow, and ``0 * inf`` would poison the gradient with NaN.
+        """
+        if active_iterations is None:
+            return new
+        return torch.where(k < active_iterations, new, old)
+
+    def _iterate_accelerated(self, y, x0, t, step_params_fn, *, gradient, callback_metadata, active_iterations=None):
         """Run FISTA with local momentum and caller-provided step parameters."""
         shrink_func = self.get_shrink_func()
         # Separate copies: begin callbacks may modify x in place, and the output must not alias x0.
@@ -305,8 +316,9 @@ class FISTA(ISTA):
                 break
             gamma_k, theta_k = step_params_fn(k)
             x_next = self.step(z, gradient, shrink_func, gamma_k, theta_k)
-            tk, z = self._nesterov_momentum(tk, x, x_next)
-            x = x_next
+            tk, z_next = self._nesterov_momentum(tk, x, x_next)
+            x = self._keep_inactive(k, active_iterations, x_next, x)
+            z = self._keep_inactive(k, active_iterations, z_next, z)
             if not self._on_iteration_end(x, gamma_k, theta_k, **callback_metadata):
                 break
         return x
