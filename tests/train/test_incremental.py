@@ -40,7 +40,7 @@ def test_history_matches_reported_metrics(problem):
     result = run(problem)
     assert isinstance(result, TrainingResult)
     assert [entry['step'] for entry in result.history] == list(range(1, STAGES * STEPS + 1))
-    assert set(result.history[0]) == {'stage', 'step', 'train_loss', 'val_loss', 'stage_best_val_loss'}
+    assert set(result.history[0]) == {'stage', 'step', 'train_loss', 'val_loss', 'stage_best_val_loss', 'val_nmse'}
     assert set(result.state_dict) == {'B', '_gamma', '_theta'}
 
 
@@ -102,6 +102,20 @@ def test_weighted_iterates_change_the_loss(problem):
     # Stage 1 has one iterate, so both runs agree until the first step of stage 2.
     weighted, final = run(problem, w=0.5).history[STEPS], run(problem).history[STEPS]
     assert weighted['train_loss'] > final['train_loss']  # the earlier iterate adds a positive term
+
+
+def test_val_nmse_is_recorded_for_any_loss_exactly_with_q_val(problem):
+    A, y, q = problem
+    config = make_config(A, loss='lasso', loss_kwargs={'lam': 0.1})
+    with_q = train_model(config, y_train=y, y_val=y[:4], q_val=q[:4]).history
+    without_q = train_model(config, y_train=y, y_val=y[:4]).history
+    assert all('val_nmse' in entry for entry in with_q)
+    assert not any('val_nmse' in entry for entry in without_q)
+
+
+def test_val_nmse_equals_val_loss_for_unweighted_nmse(problem):
+    for entry in run(problem).history:
+        assert entry['val_nmse'] == pytest.approx(entry['val_loss'])
 
 
 def test_supervised_loss_requires_targets(problem):

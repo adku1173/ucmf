@@ -21,11 +21,11 @@ from statistics import median
 from time import perf_counter
 
 from ucmf.optim.neural_augmentation import NeuralAugmentation
-from ucmf.optim.operator import CMFDictionary, CMFPropagation
+from ucmf.optim.operator import CMFPropagation
 from ucmf.optim.utils import default_gamma_from_operator
 from ucmf.scaling import normalize_operator
 from ucmf.train import TrainingConfig
-from ucmf.train.config import MODEL_NAMES, OPERATOR_NAMES
+from ucmf.train.config import MODEL_NAMES
 from ucmf.train.objectives import build_loss
 from ucmf.train.utils import (
     batch_operator,
@@ -44,6 +44,8 @@ LOSSES = ('nmse', 'lasso', 'bic', 'cv:rows', 'cv:complex_rows', 'cv:mics', 'cv:m
 LOSS_KWARGS = {'lasso': {'lam': 0.1}}
 GRID = {16: 16, 64: 51}  # grid side per array, as ucmf_data.parameters.default_focus_grid
 LAYOUTS = ('shared', 'per_batch', 'distinct')
+# MatrixMult computes like CMFDictionary (same dense products) but lacks the CMF metadata.
+OPERATORS = ('CMFDictionary', 'CMFPropagation')
 NUM_BATCHES = 8  # dataset size in batches; the step draws batches as in train_model
 
 
@@ -53,14 +55,14 @@ def parse_args():
     parser.add_argument('--layout', nargs='+', choices=LAYOUTS, default=list(LAYOUTS))
     parser.add_argument('--bank', type=int, default=205, help='dictionaries in the bank (stored frequency bins)')
     parser.add_argument('--model', nargs='+', choices=MODEL_NAMES, default=list(MODEL_NAMES))
-    parser.add_argument('--operator', nargs='+', choices=OPERATOR_NAMES, default=list(OPERATOR_NAMES))
+    parser.add_argument('--operator', nargs='+', choices=OPERATORS, default=list(OPERATORS))
     parser.add_argument('--weight', nargs='+', choices=('factored', 'precomputed'), default=['factored', 'precomputed'])
     parser.add_argument('--loss', nargs='+', choices=LOSSES, default=['nmse'])
     parser.add_argument('--w', nargs='+', type=float, default=[0.0], help='iterate weight base in [0, 1]')
     parser.add_argument('--mode', nargs='+', choices=('eager', 'compiled'), default=['eager', 'compiled'])
     parser.add_argument('--stages', type=int, default=15, help='T, the depth of the last stage')
     parser.add_argument('--batch', type=int, default=256)
-    parser.add_argument('--repeats', type=int, default=7)
+    parser.add_argument('--repeats', type=int, default=25)
     parser.add_argument('--keep-diagonal', action='store_true', help='include the CSM diagonal (default: omit it)')
     args = parser.parse_args()
     if min(args.stages, args.batch, args.repeats, args.bank) < 1:
@@ -70,8 +72,6 @@ def parse_args():
 
 def supported(model, operator, loss):
     """Whether the reduced models, CV splits and operator fit together."""
-    if operator == 'MatrixMult' and (model in REDUCED or loss in ('cv:complex_rows', 'cv:mics', 'cv:mics_cross')):
-        return False  # no CMF metadata
     if loss in ('cv:rows', 'cv:complex_rows'):  # select_rows gives a MatrixMult without CMF metadata
         return operator != 'CMFPropagation' and model not in REDUCED
     return True
@@ -100,13 +100,12 @@ def make_config(args, case, mode, H, r_diag):
         model_kwargs |= {'num_measurements': c * (c - int(r_diag)), 'weight_mode': weight}
     if not model.startswith('NA_'):
         model_kwargs['num_iterations'] = args.stages
-    matrix = {'matrix': CMFDictionary(H, r_diag).matrix} if operator == 'MatrixMult' else {'H': H, 'r_diag': r_diag}
     name, _, split = loss.partition(':')
     return TrainingConfig(
         model_name=model,
         operator_name=operator,
         model_kwargs=model_kwargs,
-        operator_kwargs=matrix,
+        operator_kwargs={'H': H, 'r_diag': r_diag},
         stages=args.stages,
         batch_size=args.batch,
         loss=name,

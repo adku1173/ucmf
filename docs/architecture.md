@@ -41,7 +41,9 @@ Solvers and callbacks are not reentrant.
 - Directions: SW/SWR `W.T (y - A z) / m` with `W = B A`; LFISTA/R `(M.T y - R.T R z) / m`
   with `R = B1 A`, `M = B2 A` ([0006](adr/0006-two-matrix-ada-lfista.md)). SWR/R use the congruence
   `B v = hvec(Br hvec*(v) Br^H)`. Subsets restrict the weights via `operator.rows` / `operator.mics`.
-- `weight_mode='precomputed'` (SW, LFISTA) forms the dense product once per solve.
+- `weight_mode='precomputed'` (SW, LFISTA) forms the dense product once per solve. The default
+  `'factored'` works with every operator; `'precomputed'` pays off for one dense operator per
+  batch with many rows (about 25 % at 64 microphones) and loses for per-problem operators.
 
 ## Scaling
 

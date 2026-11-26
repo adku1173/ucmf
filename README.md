@@ -176,6 +176,30 @@ Objectives: `nmse` (supervised), `lasso` (`lam`), `bic` (`alpha=1e-2`), and `cv`
 `w > 0`, earlier iterates enter with normalized weights `w^(t-k)`. See
 [ADR 0010](docs/adr/0010-training-objectives.md).
 
+Every validation point (`history`, Ray report) holds `stage`, `step`, `train_loss`, `val_loss`
+and `stage_best_val_loss`. Given `q_val`, it also holds `val_nmse`, the validation NMSE of the
+final iterate, for any objective; checkpoints are still selected by `val_loss`.
+
+### Choosing the training configuration
+
+Based on the [training benchmark](#benchmark-training-throughput)
+([details](docs/benchmarks/training.md)):
+
+| Case | Operator | `weight_mode` |
+| --- | --- | --- |
+| 16 mics, one frequency or `batch_sampling='per_dictionary'` | `CMFDictionary` | either |
+| 16 mics, `batch_sampling='random'` (one dictionary per sample) | `CMFDictionary` | `factored` |
+| 64 mics, one frequency | `CMFDictionary` | `precomputed` |
+| 64 mics, bank, `per_dictionary` | `CMFDictionary` if the dense bank fits (H200), else `CMFPropagation` | `precomputed` / `factored` |
+| 64 mics, bank, `random` | `CMFPropagation` | `factored` |
+
+- Keep `compile=True`: at the last stage it is 3.5–14× faster at 16 microphones. It needs Triton
+  (compute capability ≥ 7.0); on the HPC's P100 nodes only eager mode runs, use A100, V100S or H200.
+- A dictionary per batch costs almost nothing over one shared dictionary; one per sample about
+  halves the throughput at 16 microphones.
+- At 64 microphones a dense bank of 205 dictionaries (8.6 GB) fits only on the H200; elsewhere a
+  bank falls back to `CMFPropagation`, about 5× slower than a shared dense dictionary.
+
 ## Acoular integration
 
 `ucmf.acoular` provides ISTA and FISTA as custom solvers for Acoular's
@@ -511,6 +535,118 @@ the fastest dense path for each model. With one shared operator at the same size
 | 32 | distinct | AdaLFISTASWR | CMFPropagation | factored | 77.808 | 42.046 | 38.027 | 413.9 / 420.0 | 131.2 / 522.0 |
 | 32 | distinct | AdaLFISTAR | CMFDictionary | factored | 178.956 | 155.234 | 43.623 | 4287.9 / 4296.0 | 4163.2 / 6310.0 |
 | 32 | distinct | AdaLFISTAR | CMFPropagation | factored | 104.021 | 45.441 | 57.464 | 462.7 / 472.0 | 131.3 / 554.0 |
+
+</details>
+
+### Benchmark: training throughput
+
+[`examples/benchmark_training.py`](examples/benchmark_training.py) times one training step as in
+`train_model` (batch drawing, dictionary selection, objective with `nmse`, backward, Adam step) for
+every model, operator, `weight_mode`, dictionary layout and execution mode. Batch 256, `T = 15`,
+float32 without TF32, `r_diag=True`, median of 25 steps. Arrays: 16 microphones with a 16 × 16 grid
+and 64 microphones with a 51 × 51 grid. Layouts: `shared` (one dictionary), `per_batch` (bank of
+205, `batch_sampling='per_dictionary'`) and `distinct` (`batch_sampling='random'`). GPUs: RTX 3090
+(compute4) and, on the HPC in the Singularity image of [`examples/hpc`](examples/hpc), A100 40 GB,
+V100S, P100 (eager only: no Triton for compute capability 6.0) and H200 NVL.
+
+The tables list the throughput in samples/s at the last stage (`t = T`) of the fastest variant per
+model. Codes: `D` = `CMFDictionary`, `P` = `CMFPropagation`; `f`/`p` = `weight_mode`
+factored/precomputed; `c`/`e` = compiled/eager. Findings, recommendations and the raw tables of every
+case: [docs/benchmarks/training.md](docs/benchmarks/training.md).
+
+<details>
+<summary>16 microphones, 16 × 16 grid, shared</summary>
+
+| Model | RTX 3090 | A100 40 GB | V100S | P100 (eager) | H200 NVL |
+|---|---:|---:|---:|---:|---:|
+| AdaLFISTASW | 86.6 k Dfc | 63.3 k Dpc | 62.1 k Dpc | 11.8 k Dpe | 234.4 k Dpc |
+| AdaLFISTA | 77.7 k Dfc | 81.3 k Dpc | 58.2 k Dfc | 11.5 k Dpe | 197.8 k Dpc |
+| AdaLFISTASWR | 68.4 k Dc | 36.8 k Pc | 42.8 k Dc | 5.0 k De | 85.3 k Dc |
+| AdaLFISTAR | 51.7 k Dc | 32.8 k Dc | 30.4 k Dc | 3.3 k De | 49.0 k Dc |
+| NA_AdaLFISTASW | 61.6 k Dpc | 41.1 k Dpc | 39.2 k Dpc | 5.9 k Dpe | 86.4 k Dpc |
+| NA_AdaLFISTA | 49.9 k Dfc | 45.4 k Dpc | 36.7 k Dfc | 5.1 k Dfe | 75.4 k Dpc |
+| NA_AdaLFISTASWR | 48.4 k Dc | 35.2 k Dc | 29.8 k Dc | 3.2 k De | 51.6 k Dc |
+| NA_AdaLFISTAR | 33.9 k Dc | 25.4 k Dc | 20.7 k Dc | 2.4 k De | 34.8 k Dc |
+
+</details>
+
+<details>
+<summary>16 microphones, 16 × 16 grid, per_batch</summary>
+
+| Model | RTX 3090 | A100 40 GB | V100S | P100 (eager) | H200 NVL |
+|---|---:|---:|---:|---:|---:|
+| AdaLFISTASW | 79.7 k Dfc | 81.3 k Dfc | 75.6 k Dpc | 11.1 k Dpe | 197.4 k Dpc |
+| AdaLFISTA | 74.0 k Dfc | 78.3 k Dpc | 62.4 k Dpc | 10.1 k Dpe | 173.4 k Dpc |
+| AdaLFISTASWR | 62.3 k Dc | 37.7 k Pc | 43.8 k Dc | 4.6 k De | 83.2 k Dc |
+| AdaLFISTAR | 45.6 k Dc | 25.1 k Pc | 30.7 k Dc | 3.1 k De | 48.0 k Dc |
+| NA_AdaLFISTASW | 54.5 k Dpc | 39.7 k Dpc | 40.9 k Dpc | 5.5 k Dfe | 81.1 k Dpc |
+| NA_AdaLFISTA | 50.1 k Dpc | 43.8 k Dfc | 37.6 k Dfc | 5.4 k Dpe | 73.9 k Dpc |
+| NA_AdaLFISTASWR | 45.0 k Dc | 30.0 k Dc | 29.5 k Dc | 3.4 k De | 51.1 k Dc |
+| NA_AdaLFISTAR | 34.2 k Dc | 24.9 k Dc | 21.6 k Dc | 2.4 k De | 34.5 k Dc |
+
+</details>
+
+<details>
+<summary>16 microphones, 16 × 16 grid, distinct</summary>
+
+| Model | RTX 3090 | A100 40 GB | V100S | P100 (eager) | H200 NVL |
+|---|---:|---:|---:|---:|---:|
+| AdaLFISTASW | 43.7 k Dfc | 50.4 k Dpc | 43.7 k Dfc | 9.4 k Dpe | 114.9 k Dfc |
+| AdaLFISTA | 40.7 k Dfc | 52.1 k Dpc | 41.4 k Dfc | 8.6 k Dfe | 107.8 k Dpc |
+| AdaLFISTASWR | 39.5 k Pc | 32.8 k Pc | 31.0 k Dc | 4.4 k De | 64.7 k Dc |
+| AdaLFISTAR | 32.9 k Pc | 25.1 k Dc | 20.9 k Dc | 3.0 k De | 41.2 k Dc |
+| NA_AdaLFISTASW | 35.4 k Pfc | 36.4 k Dfc | 29.5 k Dfc | 5.5 k Dpe | 60.8 k Dfc |
+| NA_AdaLFISTA | 28.9 k Pfc | 29.8 k Dpc | 25.0 k Dfc | 4.9 k Dfe | 51.9 k Dfc |
+| NA_AdaLFISTASWR | 31.8 k Pc | 28.0 k Dc | 22.2 k Dc | 3.9 k De | 42.5 k Dc |
+| NA_AdaLFISTAR | 24.0 k Pc | 19.2 k Dc | 15.7 k Dc | 2.5 k De | 29.2 k Dc |
+
+</details>
+
+<details>
+<summary>64 microphones, 51 × 51 grid, shared</summary>
+
+| Model | RTX 3090 | A100 40 GB | V100S | P100 (eager) | H200 NVL |
+|---|---:|---:|---:|---:|---:|
+| AdaLFISTASW | 7.0 k Dpc | 6.8 k Dpc | 5.2 k Dpc | 3.0 k Dpe | 16.1 k Dpc |
+| AdaLFISTA | 5.8 k Dpc | 5.5 k Dpc | 4.3 k Dpc | 2.4 k Dpe | 12.9 k Dpc |
+| AdaLFISTASWR | 8.8 k Dc | 9.3 k Dc | 6.9 k Dc | 2.4 k De | 19.8 k Dc |
+| AdaLFISTAR | 6.6 k Dc | 7.4 k Dc | 5.2 k Dc | 1.5 k De | 14.4 k Dc |
+| NA_AdaLFISTASW | 6.7 k Dpc | 6.4 k Dpc | 4.9 k Dpc | 2.7 k Dpe | 14.3 k Dpc |
+| NA_AdaLFISTA | 4.6 k Dpc | 4.4 k Dpc | 3.4 k Dpc | 1.9 k Dpe | 9.9 k Dpc |
+| NA_AdaLFISTASWR | 8.2 k Dc | 8.6 k Dc | 6.4 k Dc | 2.2 k De | 16.9 k Dc |
+| NA_AdaLFISTAR | 5.6 k Dc | 6.1 k Dc | 4.4 k Dc | 1.3 k De | 11.6 k Dc |
+
+</details>
+
+<details>
+<summary>64 microphones, 51 × 51 grid, per_batch</summary>
+
+| Model | RTX 3090 | A100 40 GB | V100S | P100 (eager) | H200 NVL |
+|---|---:|---:|---:|---:|---:|
+| AdaLFISTASW | 1.5 k Pfc | 1.7 k Pfc | 1.2 k Pfc | 0.6 k Pfe | 16.0 k Dpc |
+| AdaLFISTA | 1.3 k Pfc | 1.5 k Pfc | 1.0 k Pfc | 0.5 k Pfe | 12.9 k Dpc |
+| AdaLFISTASWR | 1.7 k Pc | 2.0 k Pc | 1.4 k Pc | 0.6 k Pe | 19.6 k Dc |
+| AdaLFISTAR | 1.5 k Pc | 1.8 k Pc | 1.3 k Pc | 0.5 k Pe | 14.2 k Dc |
+| NA_AdaLFISTASW | 1.5 k Pfc | 1.8 k Pfc | 1.2 k Pfc | 0.6 k Pfe | 14.2 k Dpc |
+| NA_AdaLFISTA | 1.1 k Pfc | 1.2 k Pfc | 0.9 k Pfc | 0.4 k Pfe | 9.8 k Dpc |
+| NA_AdaLFISTASWR | 1.7 k Pc | 2.0 k Pc | 1.4 k Pc | 0.6 k Pe | 16.7 k Dc |
+| NA_AdaLFISTAR | 1.3 k Pc | 1.5 k Pc | 1.0 k Pc | 0.4 k Pe | 11.5 k Dc |
+
+</details>
+
+<details>
+<summary>64 microphones, 51 × 51 grid, distinct</summary>
+
+| Model | RTX 3090 | A100 40 GB | V100S | P100 (eager) | H200 NVL |
+|---|---:|---:|---:|---:|---:|
+| AdaLFISTASW | 1.3 k Pfc | 1.5 k Pfc | 1.1 k Pfc | 0.5 k Pfe | 4.1 k Pfc |
+| AdaLFISTA | 1.2 k Pfc | 1.3 k Pfc | 0.9 k Pfc | 0.4 k Pfe | 3.4 k Pfc |
+| AdaLFISTASWR | 1.5 k Pc | 1.7 k Pc | 1.2 k Pc | 0.5 k Pe | 4.5 k Pc |
+| AdaLFISTAR | 1.3 k Pc | 1.6 k Pc | 1.1 k Pc | 0.4 k Pe | 4.0 k Pc |
+| NA_AdaLFISTASW | 1.3 k Pfc | 1.5 k Pfc | 1.1 k Pfc | 0.5 k Pfe | 4.0 k Pfc |
+| NA_AdaLFISTA | 1.0 k Pfc | 1.1 k Pfc | 0.8 k Pfc | 0.3 k Pfe | 2.8 k Pfc |
+| NA_AdaLFISTASWR | 1.4 k Pc | 1.7 k Pc | 1.1 k Pc | 0.5 k Pe | 4.4 k Pc |
+| NA_AdaLFISTAR | 1.1 k Pc | 1.3 k Pc | 0.9 k Pc | 0.3 k Pe | 3.2 k Pc |
 
 </details>
 

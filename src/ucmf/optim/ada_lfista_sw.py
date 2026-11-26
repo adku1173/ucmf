@@ -77,6 +77,9 @@ class AdaLFISTASW(LearnedParams, _SingleWeight):
         ``'factored'`` (default) applies ``A.T @ (B.T @ r)`` without forming ``W``.
         ``'precomputed'`` forms ``W = B @ A`` once per solve and requires a dense
         ``MatrixMult`` or ``CMFDictionary`` operator.
+        Prefer ``'precomputed'`` with one dense operator per batch and many measurement rows
+        (about 25 % faster training at 64 microphones); keep ``'factored'`` for per-problem
+        operators (one ``W`` per problem costs time and memory) and for ``CMFPropagation``.
     """
 
 
@@ -109,4 +112,7 @@ class NA_AdaLFISTASW(NeuralAugmentation, _SingleWeight):
         ``'factored'`` (default) applies ``A.T @ (B.T @ r)`` without forming ``W``.
         ``'precomputed'`` forms ``W = B @ A`` once per solve and requires a dense
         ``MatrixMult`` or ``CMFDictionary`` operator.
+        Prefer ``'precomputed'`` with one dense operator per batch and many measurement rows
+        (about 25 % faster training at 64 microphones); keep ``'factored'`` for per-problem
+        operators (one ``W`` per problem costs time and memory) and for ``CMFPropagation``.
     """

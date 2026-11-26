@@ -82,6 +82,7 @@ def test_select_problems_takes_bank_entries(operator, matrix, index):
     assert type(selected) is type(operator) and selected.rows is None
     assert selected.batch_size == (None if index.ndim == 0 else index.numel())
     assert_matches_on_random_inputs(selected, matrix[index])
+    assert getattr(selected, 'hvec', None) is getattr(operator, 'hvec', None)  # CMF: vectorization reused
 
 
 def random_scale(matrix, per_problem):

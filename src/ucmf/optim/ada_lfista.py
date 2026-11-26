@@ -92,6 +92,9 @@ class AdaLFISTA(LearnedParams, _TwoWeights):
         ``'factored'`` (default) leaves ``R`` as a composition. ``'precomputed'``
         forms ``R`` once per solve and requires a dense measurement operator.
         ``M`` stays factored in either mode.
+        Prefer ``'precomputed'`` with one dense operator per batch and many measurement rows
+        (about 25 % faster training at 64 microphones); keep ``'factored'`` for per-problem
+        operators (one ``W`` per problem costs time and memory) and for ``CMFPropagation``.
     """
 
 
@@ -125,4 +128,7 @@ class NA_AdaLFISTA(NeuralAugmentation, _TwoWeights):
         ``'factored'`` (default) leaves ``R`` as a composition. ``'precomputed'``
         forms ``R`` once per solve and requires a dense measurement operator.
         ``M`` stays factored in either mode.
+        Prefer ``'precomputed'`` with one dense operator per batch and many measurement rows
+        (about 25 % faster training at 64 microphones); keep ``'factored'`` for per-problem
+        operators (one ``W`` per problem costs time and memory) and for ``CMFPropagation``.
     """

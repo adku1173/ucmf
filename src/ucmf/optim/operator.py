@@ -531,7 +531,16 @@ class CMFPropagation(LinearOperator):
         return op
 
     def _with_propagation(self, H):
-        op = CMFPropagation(H, r_diag=self.r_diag)
+        if H.shape[-2] == self.H.shape[-2]:
+            # Performance shortcut only, equivalent to the general path below: hvec depends only
+            # on the microphone count (and r_diag), so it stays valid. Copying self skips rebuilding
+            # its index tensors (several small kernels and host-device syncs), which adds up when
+            # operators are derived per training step (scale_columns, select_columns, select_problems).
+            op = copy(self)
+            op.H, op.shape = H, (self.shape[0], H.shape[-1])
+            op.batch_size = H.shape[0] if H.ndim == 3 else None
+            return op
+        op = CMFPropagation(H, r_diag=self.r_diag)  # microphone subset: own vectorization
         op._num_measurements_total, op._num_mics_total = self._num_measurements_total, self._num_mics_total
         op.rows, op.mics = self.rows, self.mics
         return op

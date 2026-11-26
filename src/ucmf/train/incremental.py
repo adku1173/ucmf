@@ -6,9 +6,11 @@ every validation point is reported to Ray (a no-op outside a Ray session) and
 collected in the returned :class:`~ucmf.train.result.TrainingResult`.
 """
 
+from functools import partial
+
 from ..optim.neural_augmentation import NeuralAugmentation
 from ..scaling import normalize_operator
-from .objectives import build_loss
+from .objectives import build_loss, nmse_loss
 from .result import TrainingResult
 from .utils import (
     batch_operator,
@@ -39,7 +41,9 @@ def train_model(config, *, y_train, y_val, q_train=None, q_val=None, index_train
     by ``lambda_max`` of the normalized operator. Validation runs in fixed batches of
     ``config.batch_size`` (incomplete batch dropped, see :func:`validation_batches`). Every
     ``config.val_every`` steps and at the end of each stage, one metrics dict is
-    reported to Ray and appended to the history.
+    reported to Ray and appended to the history. With ``q_val``, it also holds
+    ``val_nmse``, the validation NMSE of the final iterate for any loss; checkpoint
+    selection still uses ``val_loss``.
 
     Parameters
     ----------
@@ -52,7 +56,7 @@ def train_model(config, *, y_train, y_val, q_train=None, q_val=None, index_train
         Validation measurements of shape ``(M, m)`` for per-stage checkpoint selection.
     q_train, q_val : Tensor, optional
         Source strengths ``q`` of shape ``(N, n)`` / ``(M, n)`` for the unnormalized
-        operator; required for 'nmse'.
+        operator; required for 'nmse'. ``q_val`` adds ``val_nmse`` to the history.
     index_train, index_val : Tensor, optional
         Bank entry of every sample, shape ``(N,)`` / ``(M,)``, required exactly if the
         configured operator is a dictionary bank (per problem, ``K`` entries). Training
@@ -69,6 +73,7 @@ def train_model(config, *, y_train, y_val, q_train=None, q_val=None, index_train
     val_batches = validation_batches(config, y_val, q_val, index_val)
     model = build_model(config)
     objective = build_loss(config)
+    val_nmse = partial(nmse_loss, w=0)  # final iterate with the full operator, for any loss
     solve = build_solve(config, model)
     if isinstance(model, NeuralAugmentation):
         problems = None if index_train is None else index_train[: config.batch_size]
@@ -105,6 +110,8 @@ def train_model(config, *, y_train, y_val, q_train=None, q_val=None, index_train
                 'val_loss': val_loss,
                 'stage_best_val_loss': stage_best_val_loss,
             }
+            if q_val is not None:
+                metrics['val_nmse'] = evaluate(val_nmse, solve, val_batches, operator, column_norms, stage)
             history.append(metrics)
             ray_report(metrics)
         model.load_state_dict(best_state)

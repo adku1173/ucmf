@@ -155,7 +155,7 @@ def prepare_data(config, operator, y, q=None, index=None):
     index = None if index is None else index.to(config.torch_device)
     _validate_data(config, operator, y, q, index)
     if config.data_scaling == 'equireg':
-        y, q = _equiregularize(operator, y, q, index)
+        y, q = _equiregularize(operator, y, q, index, config.batch_size)
     return y, q, index
 
 
@@ -187,17 +187,24 @@ def _validate_data(config, operator, y, q, index):
         raise ValueError(f'index must hold one bank entry per sample, got shape {tuple(index.shape)}.')
 
 
-def _equiregularize(operator, y, q, index):
+def _equiregularize(operator, y, q, index, batch_size):
     """Divide measurements and optional targets per sample by ``lambda_max`` of its dictionary.
 
     A bank is processed per entry, so no per-sample copy of the dictionaries is formed.
+    ``lambda_max`` runs in chunks of ``batch_size`` samples: a matrix-free adjoint of the
+    whole dataset at once would not fit (e.g. 30 GiB for 1M samples, 16 mics, 256 points).
     """
     if index is None:
-        lam = lambda_max(operator, y)
+        lam = _chunked_lambda_max(operator, y, batch_size)
     else:
         lam = y.new_empty(y.shape[0])
         for entry in index.unique().tolist():
             mask = index == entry
-            lam[mask] = lambda_max(operator.select_problems(entry), y[mask])
+            lam[mask] = _chunked_lambda_max(operator.select_problems(entry), y[mask], batch_size)
     lam = lam.unsqueeze(-1)
     return y / lam, None if q is None else q / lam
+
+
+def _chunked_lambda_max(operator, y, batch_size):
+    """``lambda_max`` of a shared operator per sample, computed in chunks of ``batch_size``."""
+    return torch.cat([lambda_max(operator, chunk) for chunk in y.split(batch_size)])
