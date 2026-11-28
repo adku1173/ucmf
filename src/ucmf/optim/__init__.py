@@ -11,6 +11,7 @@ from .callbacks import (
     StepParamCollector,
 )
 from .compile import compile_unrolled
+from .ir_fista_b import IRFISTAB
 from .ista import FISTA, ISTA
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     'AdaLFISTASWR',
     'FISTA',
     'ISTA',
+    'IRFISTAB',
     'IntermediateOutputCollector',
     'IterationCallback',
     'NA_AdaLFISTA',

@@ -1,4 +1,4 @@
-"""CMF of three synthetic sources with ucmf's ISTA and FISTA as Acoular solvers.
+"""CMF of three synthetic sources with ISTA, FISTA and IR-FISTA-B as Acoular solvers.
 
 Uses the three-source setup from Acoular's introductory examples and compares
 the custom torch solvers with Acoular's LassoLars solver on the same problem.
@@ -12,9 +12,18 @@ from pathlib import Path
 import acoular as ac
 from acoular.solvers import L1RegularizedLeastSquaresProblem, LassoLarsSolver
 
-from ucmf.acoular import FISTATorchSolver, ISTATorchSolver
+from ucmf import IRFISTAB
+from ucmf.acoular import FISTATorchSolver, ISTATorchSolver, TorchSolver
 
 import matplotlib.pyplot as plt
+
+
+class IRFISTABTorchSolver(TorchSolver):
+    """Example adapter: n_iter limits outer sweeps, with internal global KKT stopping."""
+
+    def _create_solver(self, nonnegative, callbacks):
+        return IRFISTAB(positive=nonnegative, callbacks=callbacks)
+
 
 ac.config.global_caching = 'none'
 
@@ -35,25 +44,26 @@ ps = ac.PowerSpectra(source=ts, block_size=128, window='Hanning')
 rg = ac.RectGrid(x_min=-0.2, x_max=0.2, y_min=-0.2, y_max=0.2, z=-0.3, increment=0.01)
 st = ac.SteeringVector(grid=rg, mics=mg)
 
-# Solve the same L1-regularized CMF problem with three solvers and time the full
+# Solve the same L1-regularized CMF problem with four solvers and time the full
 # computation (including CSM and dictionary assembly). See benchmark_solvers.py
 # for a solver-only runtime comparison.
 solvers = {
     'LassoLars': LassoLarsSolver(backend_kwargs={'fit_intercept': False}),
     'ISTA': ISTATorchSolver(device='cuda', n_iter=2000),
     'FISTA': FISTATorchSolver(device='cuda', n_iter=2000),
+    'IR-FISTA-B': IRFISTABTorchSolver(device='cuda', n_iter=100),  # Outer sweeps, not proximal steps.
 }
-plt.figure(figsize=(12, 3.5))
+plt.figure(figsize=(4 * len(solvers), 3.5))
 for i, (name, solver) in enumerate(solvers.items(), start=1):
     problem = L1RegularizedLeastSquaresProblem(
-        solver=solver, alpha=1e-9, nonnegative=True, dictionary_scaling='unit_l2'
+        solver=solver, alpha=1e-4, nonnegative=True, dictionary_scaling='unit_l2'
     )
     bf = ac.BeamformerCMF(freq_data=ps, steer=st, problem=problem)
     start = time.perf_counter()
     Lm = ac.L_p(bf.synthetic(8000, 3))
     elapsed = time.perf_counter() - start
 
-    plt.subplot(1, 3, i)
+    plt.subplot(1, len(solvers), i)
     plt.imshow(Lm.T, origin='lower', vmin=Lm.max() - 20, extent=rg.extent, interpolation='nearest')
     plt.colorbar()
     plt.title(f'{name} ({elapsed:.1f} s)')

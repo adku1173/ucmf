@@ -107,6 +107,124 @@ diagonal-removal setting, and off-diagonal weights (the source repo uses
 ISTA and FISTA have no trainable parameters. Gradients flow through `y`, `x0`, `lam`,
 and `gamma`; the operator is detached. Use `torch.no_grad()` for inference.
 
+## Safeguarded IR-FISTA-B
+
+```python
+from ucmf import IRFISTAB
+
+solver = IRFISTAB(positive=True, tol=1e-6)
+with torch.no_grad():
+    x_hat = solver(y, operator=operator, lam=0.01, t=100)
+print(solver.diagnostics['status'], solver.diagnostics['natural_residual'])
+```
+
+**`t` counts outer working-set sweeps, not FISTA/ISTA proximal steps.** Each
+unconverged row gets one reduced solve per sweep; batch rows are independent.
+`positive=False` solves signed LASSO. The `nonnegative` constructor alias, when
+provided, overrides `positive`. Positive warm starts are projected to `x >= 0`.
+Only float32/float64 are accepted, strictly matching input/operator dtype/device.
+`t=0` returns and globally certifies the prepared warm start. No Acoular import
+is needed, including for `CMFPropagation`.
+
+The normalized objective is unchanged: `||Ax-y||²/(2m) + lam*||x||₁`.
+Source restriction never changes `m`. Reduced subproblems add
+`delta/2 * ||z-anchor||²`, including **`delta*(v-anchor)`** in their gradient.
+`delta=None` means `1e-3/m` (paper proximal weight `1e-3`); explicit `delta`
+is already in normalized units, scalar or per-row, and may be zero.
+Defaults: `tau=1e-4`, `inner_max_iter=100`, `inner_tol=0.1`,
+`backtracking_factor=2`, `max_backtracking=60`, `min_lipschitz=1e-12`.
+`gamma`, scalar or per-row, is only an initial inverse-curvature guess. Unlike
+ISTA/FISTA, no spectral setup is performed: omitted gamma starts `L=max(1,floor)`.
+Backtracking curvature never decreases within a reduced solve; the next outer
+solve starts at `max(floor,last_L/2)`. Exhaustion/nonfinite arithmetic raises
+`RuntimeError`, never a convergence claim. The quadratic energy test rescales
+its displacement homogeneously to avoid squaring tiny values into zero.
+
+Support is always retained; excluded zero coordinates can re-enter after each
+full gradient scan. There is no top-K cap or permanent screening. Native
+`select_columns` is used where available. Generic restriction scatters/gathers
+through full-width products; batched operators inject one row into a full batch
+and can compute unused rows. No Gram matrix or matrix-free CMF dictionary is
+formed. Selected dense matrices do allocate column copies. Generic fallbacks
+can allocate `(B,n)`/`(B,m)` scratch and do not promise reduced product savings.
+
+The returned point always gets a fresh **full** KKT check. `converged` means
+`||R||_inf <= tol + rtol*initial_residual` (`tol=1e-6`, `rtol=0`), with
+cancellation-free `R=min(x,g+lam)` in positive mode and
+`R=min(max(x,g-lam),g+lam)` in signed mode. This natural residual is **not an
+objective-gap or coefficient-error bound**; tiny positive coefficients can have
+small natural residual but large raw subgradient residual. Both are reported.
+
+`diagnostics` is replaced each solve; forward still returns only `(B,n)`:
+
+- `status`: list of `converged`, `max_iter`, or `callback_stopped` per row.
+- Detached `(B,)` tensors: `natural_residual`, `raw_residual`, `objective`,
+  `initial_residual`, `threshold`.
+- `rows`: per-row `outer_iterations`, `inner_iterations`, `working_set_sizes`
+  (one entry per actual reduced solve; already converged rows have empty lists),
+  `counts`, and `inner` records. Each inner record has `iterations`,
+  `backtracking_rejections`, `first_phi`, `best_phi`, `accepted_lipschitz`,
+  `lipschitz`, `best_residual`, `target_met`, `best_target_met`, `budget_exhausted`.
+  A later candidate can meet the target while the returned earlier best candidate
+  does not, especially on objective ties. Ties retain the earlier candidate.
+- `counts`: sum of row counters. `full_forward/adjoint` and
+  `restricted_forward/adjoint` count logical calls, including rejected trials,
+  initial/post-update scans and final certification. Restricted includes `p=n`.
+  `fallback_forward/adjoint` count restricted calls actually using full width;
+  `restriction_fallbacks` counts such reduced solves. `batch_fallback_calls`
+  counts B-wide row-injection calls. `underlying_forward/adjoint_rows` sums
+  actual batch rows processed, and `underlying_forward/adjoint_elements` sums
+  batch rows times actual source width (a work proxy, **not FLOPs**).
+  Calls made by user callbacks are outside these solver counters.
+
+Callbacks run once per outer sweep with stable full `(B,n)` iterates, `A=W`
+the full detached operator, full `y`, and `(B,1)` gamma/theta containing each
+row's last accepted inverse curvature and `lam/L` (initial guesses for untouched
+rows). Callback stop is honored but cannot override KKT status. Repeated solves
+reset solver diagnostics/stop; callback-owned state follows existing conventions.
+In-place callback edits are re-certified; positive edits are projected feasible.
+With inference-mode tensors (no mutation version counter), callbacks trigger
+conservative additional full scans, included in the counters.
+This is eager host-driven optimization, with GPU synchronization and sequential
+row scheduling; no `torch.compile` or differentiability guarantee across discrete
+boundaries. Use `no_grad` to avoid retaining iteration graphs. Diagnostics retain
+per-step scalar histories, so their host memory grows with total inner work.
+
+This is a **safeguarded adaptation** of Wang et al. (2022),
+[DOI 10.1137/20M1374328](https://doi.org/10.1137/20M1374328), not literal
+Algorithm 5. It corrects the reduced gradient and replaces the paper's spectral
+inner-decrease test with selection of the lowest-objective accepted candidate,
+including the first step. The nonnegative extension and fixed-curvature policy
+are adaptations. Exact-arithmetic descent/residual arguments do not establish
+whole coefficient-sequence convergence, local linear rates, permanent support
+identification, or universal speedups for these finite-budget defaults.
+`docs/ir_fista.md` is a historical untrusted draft, **not** the implementation contract.
+
+### Reproducible correctness and exploratory benchmarks
+
+```bash
+uv run pytest -q tests/test_ir_fista_b.py
+uv run python examples/benchmark_ir_fista_b.py --mode correctness
+# Only AFTER independent Gate 2 correctness approval:
+uv run python examples/benchmark_ir_fista_b.py --mode benchmark --gate2-passed --large \
+  --family both --m 512 --n 8192 --mics 16 --grid 32 --cap 30 --repeats 3
+```
+
+The bounded harness compares against existing FISTA/ISTA at a common full natural
+KKT tolerance using callback stopping without restarting baseline momentum. It
+checks actual product counters independently, reports objective/reference gaps
+and raw/natural residuals, and includes Gaussian and explicitly described 8kHz
+free-field acoustic `CMFPropagation` cases. Reference solves are independently
+certified FISTA runs, not IR outputs. Uncertified references and budget-censored
+performance runs are labelled. Correctness mode emits **no timing comparisons**.
+Benchmark timings include spectral setup, selection, practical stopping and
+instrumentation; construction/reference/final external oracle are excluded.
+CPU memory is process-lifetime RSS high-water, not an isolated incremental solver
+peak; CUDA allocator peaks omit driver allocations. Run fresh processes for
+memory comparisons. CLI shape/budget/device controls are available via `--help`.
+Full statistical studies, Acoular-captured data, and unavailable GPU experiments
+are not implied by these small correctness runs or bounded exploratory tooling.
+
 ## Unfolded models
 
 | Model | Learned weights | Operator |

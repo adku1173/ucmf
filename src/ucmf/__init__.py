@@ -2,6 +2,7 @@
 
 from .optim import (
     FISTA,
+    IRFISTAB,
     ISTA,
     AdaLFISTA,
     AdaLFISTAR,
@@ -20,6 +21,7 @@ __all__ = [
     'AdaLFISTASWR',
     'FISTA',
     'ISTA',
+    'IRFISTAB',
     'NA_AdaLFISTA',
     'NA_AdaLFISTAR',
     'NA_AdaLFISTASW',
