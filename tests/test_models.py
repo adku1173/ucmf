@@ -117,19 +117,31 @@ def test_applied_step_parameters_are_softplus_of_raw_parameters(spec):
     torch.testing.assert_close(model.theta, torch.full((T,), 0.01, dtype=torch.float64), rtol=1e-6, atol=1e-6)
 
 
-@parametrize_with_cases(PROBLEM, cases=ProblemCases, has_tag='dictionary')
-@parametrize_with_cases(SPEC, cases=ModelCases, has_tag='weight_mode')
-def test_precomputed_weights_match_factored_weights(spec, operator, y, x0):
-    factored = perturb_weights(build_model(spec, r_diag_of(operator)))
-    precomputed = build_model(spec, r_diag_of(operator), weight_mode='precomputed')
-    precomputed.load_state_dict(factored.state_dict())
-    expected = spec.solve(factored, y, operator, x0)
-    actual = spec.solve(precomputed, y, operator, x0)
+def assert_weight_mode_matches_default(spec, operator, y, x0, weight_mode):
+    """Iterates and parameter gradients of ``weight_mode`` match the model's default weight mode."""
+    default = perturb_weights(build_model(spec, r_diag_of(operator)))
+    model = build_model(spec, r_diag_of(operator), weight_mode=weight_mode)
+    model.load_state_dict(default.state_dict())
+    expected = spec.solve(default, y, operator, x0)
+    actual = spec.solve(model, y, operator, x0)
     torch.testing.assert_close(actual, expected)
-    expected_grads = torch.autograd.grad(expected.square().sum(), tuple(factored.parameters()))
-    actual_grads = torch.autograd.grad(actual.square().sum(), tuple(precomputed.parameters()))
+    expected_grads = torch.autograd.grad(expected.square().sum(), tuple(default.parameters()))
+    actual_grads = torch.autograd.grad(actual.square().sum(), tuple(model.parameters()))
     for actual_grad, expected_grad in zip(actual_grads, expected_grads, strict=True):
         torch.testing.assert_close(actual_grad, expected_grad)
+
+
+@parametrize_with_cases(PROBLEM, cases=ProblemCases, has_tag='dictionary')
+@parametrize_with_cases(SPEC, cases=ModelCases, has_tag='weight_mode')
+def test_precomputed_weights_match_default_weights(spec, operator, y, x0):
+    assert_weight_mode_matches_default(spec, operator, y, x0, 'precomputed')
+
+
+@parametrize_with_cases(PROBLEM, cases=ProblemCases, has_tag='cmf')
+@parametrize_with_cases(SPEC, cases=ModelCases, has_tag='matrix_free')
+def test_factored_reduced_weights_match_matrix_free_weights(spec, operator, y, x0):
+    """The dense ``B`` formed from ``Br`` reproduces the congruence, also on subsets and per problem."""
+    assert_weight_mode_matches_default(spec, operator, y, x0, 'factored')
 
 
 @parametrize_with_cases(SPEC, cases=ModelCases, has_tag='learned')

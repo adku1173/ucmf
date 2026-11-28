@@ -40,6 +40,7 @@ from ucmf.train.utils import (
 import torch
 
 REDUCED = ('AdaLFISTAR', 'AdaLFISTASWR', 'NA_AdaLFISTAR', 'NA_AdaLFISTASWR')
+WEIGHT_MODES = ('matrix_free', 'factored', 'precomputed')  # 'matrix_free' only for REDUCED
 LOSSES = ('nmse', 'lasso', 'bic', 'cv:rows', 'cv:complex_rows', 'cv:mics', 'cv:mics_cross')
 LOSS_KWARGS = {'lasso': {'lam': 0.1}}
 GRID = {16: 16, 64: 51}  # grid side per array, as ucmf_data.parameters.default_focus_grid
@@ -56,7 +57,7 @@ def parse_args():
     parser.add_argument('--bank', type=int, default=205, help='dictionaries in the bank (stored frequency bins)')
     parser.add_argument('--model', nargs='+', choices=MODEL_NAMES, default=list(MODEL_NAMES))
     parser.add_argument('--operator', nargs='+', choices=OPERATORS, default=list(OPERATORS))
-    parser.add_argument('--weight', nargs='+', choices=('factored', 'precomputed'), default=['factored', 'precomputed'])
+    parser.add_argument('--weight', nargs='+', choices=WEIGHT_MODES, default=list(WEIGHT_MODES))
     parser.add_argument('--loss', nargs='+', choices=LOSSES, default=['nmse'])
     parser.add_argument('--w', nargs='+', type=float, default=[0.0], help='iterate weight base in [0, 1]')
     parser.add_argument('--mode', nargs='+', choices=('eager', 'compiled'), default=['eager', 'compiled'])
@@ -82,10 +83,11 @@ def cases(args):
     for c, layout, model, operator, loss, w in product(*axes):
         if not supported(model, operator, loss):
             continue
-        if model in REDUCED:
-            weights = ['—']
-        else:
-            weights = [weight for weight in args.weight if weight == 'factored' or operator != 'CMFPropagation']
+        weights = [
+            weight for weight in args.weight
+            if (weight != 'matrix_free' or model in REDUCED)
+            and (weight != 'precomputed' or operator != 'CMFPropagation')
+        ]
         for weight in weights:
             yield c, layout, model, operator, weight, loss, w
 
@@ -95,7 +97,7 @@ def make_config(args, case, mode, H, r_diag):
     gamma = float(default_gamma_from_operator(normalize_operator(CMFPropagation(H, r_diag))[0]).min())
     model_kwargs = {'gamma_init': gamma, 'theta_init': 0.01}
     if model in REDUCED:
-        model_kwargs |= {'num_mics': c, 'r_diag': r_diag}
+        model_kwargs |= {'num_mics': c, 'r_diag': r_diag, 'weight_mode': weight}
     else:
         model_kwargs |= {'num_measurements': c * (c - int(r_diag)), 'weight_mode': weight}
     if not model.startswith('NA_'):

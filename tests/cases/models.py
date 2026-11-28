@@ -2,8 +2,8 @@
 
 Tags: ``classical`` (ISTA/FISTA) or ``unfolded``; unfolded models are ``learned``
 or ``na``. ``dense`` (accepts ``MatrixMult``), ``cmf_only`` (requires CMF
-coordinates), ``weight_mode`` (factored/precomputed), ``two_weights``
-(``W_recurrent`` callback).
+coordinates), ``weight_mode`` (accepts ``weight_mode='precomputed'``), ``matrix_free`` (reduced
+weights, default ``weight_mode='matrix_free'``), ``two_weights`` (``W_recurrent`` callback).
 """
 
 from dataclasses import make_dataclass
@@ -211,11 +211,11 @@ class ModelCases:
     def case_lfista(self):
         return unfolded_spec(AdaLFISTA, dense_size, lfista_weights, ['B1', 'B2'], ('B1', 'B2'))
 
-    @case(tags=('unfolded', 'learned', 'cmf_only'))
+    @case(tags=('unfolded', 'learned', 'cmf_only', 'weight_mode', 'matrix_free'))
     def case_swr(self):
         return unfolded_spec(AdaLFISTASWR, reduced_size, swr_weights, ['Br_re', 'Br_im'])
 
-    @case(tags=('unfolded', 'learned', 'cmf_only', 'two_weights'))
+    @case(tags=('unfolded', 'learned', 'cmf_only', 'weight_mode', 'matrix_free', 'two_weights'))
     def case_r(self):
         return unfolded_spec(AdaLFISTAR, reduced_size, r_weights, ['Br1_re', 'Br1_im', 'Br2_re', 'Br2_im'])
 
@@ -227,10 +227,10 @@ class ModelCases:
     def case_na_lfista(self):
         return unfolded_spec(NA_AdaLFISTA, dense_size, lfista_weights, ['B1', 'B2'], ('B1', 'B2'))
 
-    @case(tags=('unfolded', 'na', 'cmf_only'))
+    @case(tags=('unfolded', 'na', 'cmf_only', 'weight_mode', 'matrix_free'))
     def case_na_swr(self):
         return unfolded_spec(NA_AdaLFISTASWR, reduced_size, swr_weights, ['Br_re', 'Br_im'])
 
-    @case(tags=('unfolded', 'na', 'cmf_only', 'two_weights'))
+    @case(tags=('unfolded', 'na', 'cmf_only', 'weight_mode', 'matrix_free', 'two_weights'))
     def case_na_r(self):
         return unfolded_spec(NA_AdaLFISTAR, reduced_size, r_weights, ['Br1_re', 'Br1_im', 'Br2_re', 'Br2_im'])

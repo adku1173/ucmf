@@ -7,7 +7,9 @@ It is the congruence with a learned complex ``Br = Br_re + i Br_im`` (``c x c``,
     B v = hvec(Br hvec*(v) Br^H),     B^T v = hvec(Br^H hvec*(v) Br).
 
 With ``r_diag=True``, ``hvec*`` restores a zero diagonal before weighting and
-``hvec`` drops it afterwards. Neither ``B`` nor ``W = B @ A`` is materialized.
+``hvec`` drops it afterwards. By default (``weight_mode='matrix_free'``), neither ``B`` nor
+``W = B @ A`` is materialized; ``'factored'`` and ``'precomputed'`` form the dense ``B`` once per
+solve and continue as ``AdaLFISTASW``.
 ``Br = I`` gives ``B = I``, recovering FISTA. The general update is:
 
     x_next = shrink(z + gamma_k * A^T B^T (y - A z) / m, theta_k)
@@ -25,8 +27,11 @@ from torch import nn
 class _ReducedSingleWeight(FISTA):
     """Update direction ``A^T B^T (y - A z) / m`` with ``B`` the congruence with ``Br``."""
 
-    def __init__(self, *, num_mics, nonnegative=True, callbacks=None, r_diag=False):
+    def __init__(self, *, num_mics, nonnegative=True, callbacks=None, r_diag=False, weight_mode='matrix_free'):
         super().__init__(nonnegative=nonnegative, callbacks=callbacks)
+        if weight_mode not in ('matrix_free', 'factored', 'precomputed'):
+            raise ValueError("weight_mode must be 'matrix_free', 'factored' or 'precomputed'.")
+        self.weight_mode = weight_mode
         if num_mics <= int(r_diag):
             raise ValueError(f'num_mics must exceed {int(r_diag)} for r_diag={r_diag}, got {num_mics}.')
         self.num_mics = num_mics
@@ -42,7 +47,7 @@ class _ReducedSingleWeight(FISTA):
         """
         validate_cmf_operator(operator, self.num_mics, self.r_diag)
         y, x0, operator = self._prepare_operator_inputs(y, x0, operator)
-        weight_operator = make_propagation_weight_operator(operator, self.Br_re, self.Br_im)
+        weight_operator = make_propagation_weight_operator(operator, self.Br_re, self.Br_im, self.weight_mode)
         gradient = self._make_gradient(y, operator, weight_operator)
         residual_gradient = self._make_residual_gradient(y, operator, weight_operator)
         return y, x0, gradient, residual_gradient, {'A': operator, 'W': weight_operator, 'y': y}
@@ -69,6 +74,10 @@ class AdaLFISTASWR(LearnedParams, _ReducedSingleWeight):
         Solver callbacks; end callbacks get the operators ``A`` and ``W``.
     r_diag : bool, optional
         Whether the CSM diagonal is omitted (default False); must match the operator.
+    weight_mode : {'matrix_free', 'factored', 'precomputed'}, optional
+        ``'matrix_free'`` (default) applies the congruence; ``'factored'`` and ``'precomputed'``
+        form the dense weight once per solve, see
+        :func:`~ucmf.optim.weights.make_propagation_weight_operator`.
     """
 
 
@@ -97,4 +106,8 @@ class NA_AdaLFISTASWR(NeuralAugmentation, _ReducedSingleWeight):
         Solver callbacks; end callbacks get the operators ``A`` and ``W``.
     r_diag : bool, optional
         Whether the CSM diagonal is omitted (default False); must match the operator.
+    weight_mode : {'matrix_free', 'factored', 'precomputed'}, optional
+        ``'matrix_free'`` (default) applies the congruence; ``'factored'`` and ``'precomputed'``
+        form the dense weight once per solve, see
+        :func:`~ucmf.optim.weights.make_propagation_weight_operator`.
     """

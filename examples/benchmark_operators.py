@@ -39,6 +39,7 @@ MODELS = {model.__name__: model for model in (
 CLASSICAL = (ISTA, FISTA)
 REDUCED = (AdaLFISTASWR, AdaLFISTAR, NA_AdaLFISTASWR, NA_AdaLFISTAR)
 DENSE_WEIGHTS = (AdaLFISTASW, AdaLFISTA, NA_AdaLFISTASW, NA_AdaLFISTA)
+WEIGHT_MODES = ('matrix_free', 'factored', 'precomputed')  # 'matrix_free' only for REDUCED
 NEURAL = (NA_AdaLFISTASW, NA_AdaLFISTA, NA_AdaLFISTASWR, NA_AdaLFISTAR)
 OPERATORS = ('CMFDictionary', 'CMFPropagation')
 GRID = {16: 16, 64: 51}  # grid side per array, as ucmf_data.parameters.default_focus_grid
@@ -51,7 +52,7 @@ def parse_args():
     parser.add_argument('--layout', nargs='+', choices=('shared', 'distinct'), default=['shared', 'distinct'])
     parser.add_argument('--model', nargs='+', choices=MODELS, default=list(MODELS))
     parser.add_argument('--operator', nargs='+', choices=OPERATORS, default=OPERATORS)
-    parser.add_argument('--weight', nargs='+', choices=('factored', 'precomputed'), default=['factored', 'precomputed'])
+    parser.add_argument('--weight', nargs='+', choices=WEIGHT_MODES, default=list(WEIGHT_MODES))
     parser.add_argument('--mode', nargs='+', choices=('eager', 'compiled'), default=['eager', 'compiled'])
     parser.add_argument('--steps', type=int, default=15)
     parser.add_argument('--repeats', type=int, default=7)
@@ -70,10 +71,14 @@ def cases(args):
         if (batch == 1 and layout == 'distinct') or (batch == 512 and c != 16):
             continue
         model_type = MODELS[name]
-        if model_type not in DENSE_WEIGHTS:
-            weights = ['—' if model_type in CLASSICAL else 'factored']
+        if model_type in CLASSICAL:
+            weights = ['—']
         else:
-            weights = [w for w in args.weight if w == 'factored' or representation != 'CMFPropagation']
+            weights = [
+                w for w in args.weight
+                if (w != 'matrix_free' or model_type in REDUCED)
+                and (w != 'precomputed' or representation != 'CMFPropagation')
+            ]
         for weight in weights:
             yield c, grid, batch, layout, model_type, representation, weight
 
@@ -108,7 +113,7 @@ def make_model(model_type, c, propagation, steps, weight_mode, gamma):
     theta = 0.01
     if model_type in CLASSICAL:
         return model_type(nonnegative=False), {'gamma': gamma, 'lam': theta / gamma}
-    kwargs = {'weight_mode': weight_mode} if model_type in DENSE_WEIGHTS else {}
+    kwargs = {'weight_mode': weight_mode}
     if model_type not in NEURAL:
         kwargs['num_iterations'] = steps
     size = {'num_mics': c, 'r_diag': propagation.r_diag} if model_type in REDUCED else {
@@ -185,14 +190,15 @@ def run(args, case, mode, *, header):
         source = make_inputs(c, grid, batch, layout, not args.keep_diagonal, rng)
         propagation = source[0][1]
         gamma = 0.6 * float(default_gamma_from_operator(propagation).min())
-        model, kwargs = make_model(model_type, c, propagation, args.steps, 'factored', gamma)
+        default_weight = 'matrix_free' if model_type in REDUCED else 'factored'
+        model, kwargs = make_model(model_type, c, propagation, args.steps, default_weight, gamma)
         if model_type in NEURAL:
             # Shared batches use one operator, so both enter the normalization (nonzero spread at batch 1).
             y = torch.cat([y for y, _ in source]) if layout == 'shared' else source[0][0]
             model.init_normalizers(y, propagation)
         solve, step = make_step(model, args.steps, kwargs)
         references = [tuple(value.cpu() for value in step(solve, data)) for data in source]
-        if weight == 'precomputed':
+        if weight not in ('—', default_weight):
             # Same parameters and feature normalization as the reference model.
             state = model.state_dict()
             del model, solve, step

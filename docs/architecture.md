@@ -44,6 +44,10 @@ Solvers and callbacks are not reentrant.
 - `weight_mode='precomputed'` (SW, LFISTA) forms the dense product once per solve. The default
   `'factored'` works with every operator; `'precomputed'` pays off for one dense operator per
   batch with many rows (about 25 % at 64 microphones) and loses for per-problem operators.
+- SWR/R default to `weight_mode='matrix_free'`: the congruence is applied directly and `B` is never
+  formed. `'factored'` and `'precomputed'` form the dense active `B` once per solve (the adjoint of
+  the identity, `_AuxiliaryPropagationOperator.dense_matrix`) and continue as SW/LFISTA. The
+  congruence costs about as much as a dense `B` at 16 microphones but is cheaper at 64.
 
 ## Scaling
 
@@ -96,6 +100,6 @@ train_model: normalize_operator → prepare_data (train, val; equireg) → build
 ## Tests
 
 `tests/cases/` holds the pytest-cases: `ModelCases` (every model as a `ModelSpec`, tagged
-`classical`/`unfolded`, `learned`/`na`, `dense`, `cmf_only`, `weight_mode`, `two_weights`),
+`classical`/`unfolded`, `learned`/`na`, `dense`, `cmf_only`, `weight_mode`, `matrix_free`, `two_weights`),
 `ProblemCases`, and `OperatorCases`. `tests/helpers.py` holds callbacks and the dense
 reference iteration. Shared properties are tested once in `test_models.py`.

@@ -2,8 +2,10 @@
 
 Like ``AdaLFISTA``, but both ``m x m`` auxiliary weights are congruences with
 learned complex ``c x c`` matrices ``Br1`` (recurrence ``R``) and ``Br2``
-(measurement branch ``M``), as in ``AdaLFISTASWR``. Neither weight is
-materialized. ``Br1 = Br2 = I`` recovers FISTA.
+(measurement branch ``M``), as in ``AdaLFISTASWR``. By default
+(``weight_mode='matrix_free'``), neither weight is materialized; ``'factored'`` and
+``'precomputed'`` form both dense weights once per solve and continue as ``AdaLFISTA``.
+``Br1 = Br2 = I`` recovers FISTA.
 """
 
 from .ista import FISTA
@@ -18,8 +20,11 @@ from torch import nn
 class _ReducedTwoWeights(FISTA):
     """Update direction ``(M.T @ y - R.T @ (R @ z)) / m``; ``Br1`` defines ``R``, ``Br2`` ``M``."""
 
-    def __init__(self, *, num_mics, nonnegative=True, callbacks=None, r_diag=False):
+    def __init__(self, *, num_mics, nonnegative=True, callbacks=None, r_diag=False, weight_mode='matrix_free'):
         super().__init__(nonnegative=nonnegative, callbacks=callbacks)
+        if weight_mode not in ('matrix_free', 'factored', 'precomputed'):
+            raise ValueError("weight_mode must be 'matrix_free', 'factored' or 'precomputed'.")
+        self.weight_mode = weight_mode
         if num_mics <= int(r_diag):
             raise ValueError(f'num_mics must exceed {int(r_diag)} for r_diag={r_diag}, got {num_mics}.')
         self.num_mics, self.r_diag = num_mics, r_diag
@@ -35,8 +40,8 @@ class _ReducedTwoWeights(FISTA):
         """
         validate_cmf_operator(operator, self.num_mics, self.r_diag)
         y, x0, operator = self._prepare_operator_inputs(y, x0, operator)
-        recurrent_operator = make_propagation_weight_operator(operator, self.Br1_re, self.Br1_im)
-        weight_operator = make_propagation_weight_operator(operator, self.Br2_re, self.Br2_im)
+        recurrent_operator = make_propagation_weight_operator(operator, self.Br1_re, self.Br1_im, self.weight_mode)
+        weight_operator = make_propagation_weight_operator(operator, self.Br2_re, self.Br2_im, self.weight_mode)
         measurement_term = weight_operator.adjoint(y)
         m = float(y.shape[1])
 
@@ -56,7 +61,7 @@ class AdaLFISTAR(LearnedParams, _ReducedTwoWeights):
     """Ada-LFISTA with two independent complex auxiliary propagation matrices.
 
     ``Br1`` defines the recurrence ``R``, and ``Br2`` the measurement branch
-    ``M``. Both start at identity and stay factored. The update direction is
+    ``M``. Both start at identity. The update direction is
     ``(M.T @ y - R.T @ (R @ z)) / m``. With a removed diagonal, both weights act
     on zero-diagonal CSMs and keep only the off-diagonal output. All arguments
     are keyword-only.
@@ -77,6 +82,10 @@ class AdaLFISTAR(LearnedParams, _ReducedTwoWeights):
         Solver callbacks; end callbacks get the operators ``A``, ``W = M``, and ``W_recurrent = R``.
     r_diag : bool, optional
         Whether the CSM diagonal is omitted (default False); must match the operator.
+    weight_mode : {'matrix_free', 'factored', 'precomputed'}, optional
+        ``'matrix_free'`` (default) applies the congruence; ``'factored'`` and ``'precomputed'``
+        form the dense weight once per solve, see
+        :func:`~ucmf.optim.weights.make_propagation_weight_operator`.
     """
 
 
@@ -105,4 +114,8 @@ class NA_AdaLFISTAR(NeuralAugmentation, _ReducedTwoWeights):
         Solver callbacks; end callbacks get the operators ``A``, ``W = M``, and ``W_recurrent = R``.
     r_diag : bool, optional
         Whether the CSM diagonal is omitted (default False); must match the operator.
+    weight_mode : {'matrix_free', 'factored', 'precomputed'}, optional
+        ``'matrix_free'`` (default) applies the congruence; ``'factored'`` and ``'precomputed'``
+        form the dense weight once per solve, see
+        :func:`~ucmf.optim.weights.make_propagation_weight_operator`.
     """

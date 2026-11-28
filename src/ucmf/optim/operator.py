@@ -446,6 +446,18 @@ class _AuxiliaryPropagationOperator(LinearOperator):
     def adjoint(self, r):
         return self._apply(r, self.Br.mH)
 
+    def dense_matrix(self):
+        """Dense ``B`` in the active coordinates, shared ``(m, m)`` or per problem ``(B, m, m)``.
+
+        Row ``i`` is ``B.T e_i``: the adjoint of the identity, with the problems as the middle
+        batch axis for a per-problem operator.
+        """
+        m = self.shape[0]
+        identity = torch.eye(m, dtype=self.dtype, device=self.device)
+        if self.batch_size is None:
+            return self.adjoint(identity)
+        return self.adjoint(identity.unsqueeze(1).expand(m, self.batch_size, m)).transpose(0, 1)
+
     def detached(self):
         return _AuxiliaryPropagationOperator(self.Br.detach(), self.hvec, self.hvec_rows)
 

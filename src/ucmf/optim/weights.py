@@ -54,12 +54,17 @@ def make_weight_operator(operator, B, weight_mode='factored'):
         If ``B`` or ``operator.rows`` do not fit the operator, or ``'precomputed'``
         is requested for a matrix-free operator.
     """
+    return _compose_weight(operator, _active_weight(operator, B), weight_mode)
+
+
+def _compose_weight(operator, B_active, weight_mode):
+    """``W = B_active @ A``, factored or as the dense product (``'precomputed'``)."""
     if weight_mode == 'precomputed':
         if not isinstance(operator, MatrixMult):
             raise ValueError("weight_mode='precomputed' requires a dense MatrixMult or CMFDictionary operator.")
-        matrix = apply_auxiliary_weight(_active_weight(operator, B), operator.matrix)
+        matrix = apply_auxiliary_weight(B_active, operator.matrix)
         return operator._with_matrix(matrix, rows=operator.rows)
-    return _AuxiliaryOperator(operator, MatrixMult(_active_weight(operator, B)))
+    return _AuxiliaryOperator(operator, MatrixMult(B_active))
 
 
 def validate_cmf_operator(operator, num_mics, r_diag):
@@ -87,7 +92,7 @@ def validate_cmf_operator(operator, num_mics, r_diag):
         raise ValueError(f'operator has {operator._num_mics_total} microphones in total but Br expects {num_mics}.')
 
 
-def make_propagation_weight_operator(operator, Br_re, Br_im):
+def make_propagation_weight_operator(operator, Br_re, Br_im, weight_mode='matrix_free'):
     """Compose the fixed CMF operator with a learned congruence on its active microphones.
 
     Parameters
@@ -98,11 +103,17 @@ def make_propagation_weight_operator(operator, Br_re, Br_im):
         rows, as ``B[rows, rows]`` of a dense weight).
     Br_re, Br_im : Tensor
         Real and imaginary parts of the full ``(c, c)`` auxiliary propagation matrix.
+    weight_mode : {'matrix_free', 'factored', 'precomputed'}, optional
+        ``'matrix_free'`` (default) applies the congruence and never forms ``B``.
+        ``'factored'`` and ``'precomputed'`` form the dense active ``B`` once per call and
+        continue as :func:`make_weight_operator`; ``'precomputed'`` requires a
+        ``CMFDictionary``.
 
     Returns
     -------
     LinearOperator
-        Operator applying ``W = B A`` and ``W.T``, with ``B v = hvec(Br hvec*(v) Br^H)``.
+        Operator applying ``W = B A`` and ``W.T``, with ``B v = hvec(Br hvec*(v) Br^H)``,
+        differentiable in ``Br_re`` and ``Br_im``.
     """
     validate_tensor(Br_re, name='Br_re', dtype=operator.dtype, device=operator.device)
     validate_tensor(Br_im, name='Br_im', dtype=operator.dtype, device=operator.device)
@@ -110,7 +121,10 @@ def make_propagation_weight_operator(operator, Br_re, Br_im):
     mics = operator.mics
     if mics is not None:
         Br = Br[mics.unsqueeze(-1), mics.unsqueeze(-2)]
-    return _AuxiliaryOperator(operator, _AuxiliaryPropagationOperator(Br, operator.hvec, operator.hvec_rows))
+    weight = _AuxiliaryPropagationOperator(Br, operator.hvec, operator.hvec_rows)
+    if weight_mode == 'matrix_free':
+        return _AuxiliaryOperator(operator, weight)
+    return _compose_weight(operator, weight.dense_matrix(), weight_mode)
 
 
 def apply_auxiliary_weight(B, A_tensor):

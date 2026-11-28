@@ -118,6 +118,10 @@ and `gamma`; the operator is detached. Use `torch.no_grad()` for inference.
 
 `AdaLFISTA*` learn one `gamma`/`theta` per iteration; `NA_AdaLFISTA*` predict them per
 sample with an LSTM. Weights start at the identity, which reproduces FISTA.
+`weight_mode` selects how the auxiliary weights are applied: `'factored'` (default of SW/LFISTA)
+or `'precomputed'` (dense `W = B A`, `CMFDictionary` or `MatrixMult` only); SWR/R additionally
+offer `'matrix_free'` (their default: the congruence with `Br`, `B` never formed), and with
+`'factored'`/`'precomputed'` they form the dense `B` from `Br` once per solve.
 The models require an operator with unit column norms; `ucmf.scaling` normalizes
 it and maps the solution back to source strengths. Constructors are keyword-only:
 
